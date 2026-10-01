@@ -1,4 +1,4 @@
-// Meme-Soundboard – läuft nur auf localhost, keine Dependencies.
+// ClipSound (Web) – läuft nur auf localhost, keine Dependencies.
 // Start: node server.js  →  http://localhost:3000
 const http = require('http');
 const fs = require('fs');
@@ -131,4 +131,4 @@ http.createServer((req, res) => {
   const type = STATIC_TYPES[path.extname(rel)];
   if (!type) return json(res, 404, { error: 'Nicht gefunden' });
   serveFile(req, res, path.join(PUBLIC_DIR, rel), type);
-}).listen(PORT, '127.0.0.1', () => console.log(`🔊 Meme-Soundboard läuft auf http://localhost:${PORT}`));
+}).listen(PORT, '127.0.0.1', () => console.log(`🔊 ClipSound läuft auf http://localhost:${PORT}`));

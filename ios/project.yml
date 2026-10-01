@@ -1,0 +1,46 @@
+name: ClipSound
+options:
+  bundleIdPrefix: at.timur
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    DEVELOPMENT_TEAM: S6Q68QRU6Y
+targets:
+  ClipSound:
+    type: application
+    platform: iOS
+    sources:
+      - path: ClipSound
+      # gleiche Audio-Engine wie die Mac-App (bis 500 %)
+      - path: ../macos/Sources/ClipSound/SoundPlayer.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound
+        MARKETING_VERSION: "1.1"
+        CURRENT_PROJECT_VERSION: 2
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+    info:
+      path: ClipSound/Info.plist
+      properties:
+        CFBundleDisplayName: ClipSound
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        # Sound-Ordner in der Dateien-App sichtbar („Auf meinem iPhone › ClipSound“)
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight

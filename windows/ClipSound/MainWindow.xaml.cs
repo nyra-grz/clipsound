@@ -32,6 +32,9 @@ public partial class MainWindow : Window
     private List<TileViewModel> _tiles = new();
     private TileViewModel? _recording;
     private bool _loading = true;
+    /// <summary>Bei Testläufen keine Meldungsfenster – die würden den Test blockieren.</summary>
+    public static bool TestMode { get; } = HasArg("--snapshot") || HasArg("--selftest");
+    private readonly List<string> _testErrors = new();
 
     public MainWindow()
     {
@@ -389,8 +392,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void ShowError(string text) =>
+    private void ShowError(string text)
+    {
+        if (TestMode) { _testErrors.Add(text); return; }
         MessageBox.Show(this, text, "ClipSound", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
 
     // ---------- Tests ----------
 
@@ -441,6 +447,7 @@ public partial class MainWindow : Window
         var sb = new StringBuilder();
         sb.AppendLine($"Sounds: {_library.Sounds.Count}, Kacheln: {_tiles.Count}, Fenster: {ActualWidth}x{ActualHeight}");
         sb.AppendLine($"Audio: {(_player is null ? "kein Gerät – " + _playerError : "ok")}");
+        if (_testErrors.Count > 0) sb.AppendLine("Meldungen: " + string.Join(" | ", _testErrors));
         sb.AppendLine("Tasten: " + string.Join(", ", _library.Sounds.Take(6).Select(s => $"{s.Title}={_keys.Binds.GetValueOrDefault(s.FileName)?.Display ?? "–"}")));
 
         if (_library.Sounds.Count > 0)

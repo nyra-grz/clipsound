@@ -5,8 +5,14 @@ server.log
 
 # Builds
 Meme Soundboard.app/
+ClipSound.app/
 macos/.build/
 macos/dist/
 windows/dist/
 windows/**/bin/
 windows/**/obj/
+
+# iOS (Projekt wird mit xcodegen erzeugt)
+ios/build/
+ios/build-sim/
+ios/ClipSound.xcodeproj/

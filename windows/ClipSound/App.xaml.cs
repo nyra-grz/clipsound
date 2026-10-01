@@ -9,6 +9,14 @@ public partial class App : Application
         // Unerwartete Fehler anzeigen statt kommentarlos abzustürzen
         DispatcherUnhandledException += (_, args) =>
         {
+            if (MainWindow.TestMode)
+            {
+                // Testlauf: Fehler in eine Datei schreiben und beenden statt ein Fenster zu zeigen
+                System.IO.File.WriteAllText(System.IO.Path.Combine(System.IO.Path.GetTempPath(), "clipsound-crash.txt"), args.Exception.ToString());
+                args.Handled = true;
+                Shutdown(1);
+                return;
+            }
             MessageBox.Show(args.Exception.Message, "ClipSound – Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };

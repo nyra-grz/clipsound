@@ -41,16 +41,28 @@ jobs:
       - name: App starten – Screenshots und Selbsttest
         shell: pwsh
         run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $script:n = 0
           function Run($argList) {
             $p = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList $argList -PassThru
-            if (-not $p.WaitForExit(90000)) { $p.Kill(); Write-Host "Zeitüberschreitung: $argList" }
+            if (-not $p.WaitForExit(60000)) {
+              # Bildschirm fotografieren, um zu sehen, woran es hängt
+              $script:n++
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+              [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save("$pwd\shots\haengt-$script:n.png")
+              $p.Kill(); Write-Host "Zeitüberschreitung: $argList"
+            }
+            $crash = Join-Path $env:TEMP 'clipsound-crash.txt'
+            if (Test-Path $crash) { Write-Host "ABSTURZ:"; Get-Content $crash; Move-Item $crash "$pwd\shots\absturz-$(Get-Random).txt" }
           }
           Run @('--library', "$pwd\testlib\Sounds", '--snapshot', "$pwd\shots\1-normal.png", '--selftest', "$pwd\shots\selftest.txt")
           Run @('--library', "$pwd\testlib\Sounds", '--size', '700x600', '--snapshot', "$pwd\shots\2-schmal.png", '--selftest', "$pwd\shots\selftest-schmal.txt")
           Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
           Get-ChildItem shots
-          Get-Content shots\*.txt
+          Get-ChildItem shots -Filter *.txt | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }
 
       - uses: actions/upload-artifact@v4
         if: always()

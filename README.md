@@ -1,24 +1,36 @@
-# Meme Soundboard
+# ClipSound
 
-Ein Soundboard für Meme-Sounds in drei Versionen. Jede Version spielt mit einem Klick oder Tastendruck ab und kann bis 500 % verstärken.
+Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sound ab, die Lautstärke geht bis 500 %. Es gibt ClipSound für Mac, Windows, iPhone und als Webseite.
 
-| Ordner | Was | Starten / Bauen |
+**Download:** [Releases](../../releases/latest)
+
+| Ordner | Was | Bauen / Starten |
 |---|---|---|
-| `server.js`, `public/` | Webseite auf `localhost:3000`, Sounds hochladen per Drag & Drop | `node server.js` oder `./start.sh` (öffnet Safari) |
-| `macos/` | Native Mac-App (SwiftUI, AVAudioEngine) | `./macos/build-app.sh` → `macos/dist/Meme Soundboard.app` |
-| `windows/` | Windows-App (WPF, NAudio) | `dotnet publish windows/MemeSoundboard -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/dist` |
+| `macos/` | Mac-App (SwiftUI, AVAudioEngine) | `./macos/build-app.sh` → `macos/dist/ClipSound.app` |
+| `windows/` | Windows-App (WPF im Windows-11-Design, NAudio) | `dotnet publish windows/ClipSound -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/dist` |
+| `ios/` | iPhone- und iPad-App (SwiftUI) | `cd ios && xcodegen generate`, dann in Xcode öffnen |
+| `server.js`, `public/` | Webseite auf `localhost:3000` | `node server.js` oder `./start.sh` |
 
-## Bedienung
+## Tastenkürzel (Mac und Windows)
 
-- Tasten **1–0** und **Q–P** spielen die ersten 20 Sounds
-- **Esc** stoppt alles
-- **Überlappen** lässt mehrere Sounds gleichzeitig laufen
-- Lautstärke von 0 bis 500 %
+- Jeder Sound bekommt seine eigene Taste. Neue Sounds erhalten automatisch die nächste freie Taste aus 1–0 und Q–P.
+- Zum Ändern: auf das Tasten-Feld der Kachel klicken oder Rechtsklick → **Taste festlegen …**, dann die Taste oder Kombination drücken. ⌫ bzw. Rücktaste entfernt die Taste.
+- **Im Hintergrund** (z. B. in Spielen oder Discord) funktionieren Kombinationen
+  - am Mac mit **⌃ (ctrl)**, z. B. ⌃⌥1,
+  - unter Windows mit **Umschalt + Strg oder Alt**, z. B. Strg+Umschalt+1.
 
-Die Apps starten leer. Sounds kommen per Import, als einzelne Dateien oder als ganzer Ordner, oder per Drag & Drop ins Fenster.
+  Solche Kürzel haben in der App ein 🌐-Symbol.
+- **Esc** stoppt alles.
+
+## Allgemein
+
+- Mit **Überlappen** laufen mehrere Sounds gleichzeitig.
+- Die Apps starten leer. Sounds lassen sich einzeln oder als ganzer Ordner importieren, auch per Drag & Drop.
+- Auf dem iPhone liegen die Sounds in der Dateien-App unter *Auf meinem iPhone › ClipSound*.
 
 ## Voraussetzungen
 
-- Web: Node.js 18+
 - Mac: macOS 15+, Xcode
-- Windows-Build: .NET 8 SDK (der Build läuft auch auf macOS)
+- Windows: Windows 10/11 (64 Bit). Zum Bauen braucht man das .NET 10 SDK; der Build läuft auch auf macOS.
+- iPhone: iOS 17+, Xcode und xcodegen
+- Web: Node.js 18+
