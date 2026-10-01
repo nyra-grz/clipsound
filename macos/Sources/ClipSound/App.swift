@@ -5,6 +5,8 @@ import AppKit
 //   --library <ordner>   anderen Sound-Ordner benutzen
 //   --snapshot <png>     Fenster nach dem Start als Bild speichern und beenden
 //   --import <pfad>      Datei/Ordner importieren, Ergebnis ausgeben und beenden
+//   --keytest            Tastenkürzel prüfen (⌃⌥K auf den ersten Sound), Ergebnis ausgeben und beenden
+//   --recorder           Aufnahme-Fenster für den ersten Sound öffnen (für Screenshots)
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
 enum LaunchArgs {
     static let args = ProcessInfo.processInfo.arguments
@@ -28,13 +30,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         if let path = LaunchArgs.value("--snapshot") {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { Self.snapshot(to: path); NSApp.terminate(nil) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { Self.snapshot(to: path); NSApp.terminate(nil) }
         }
         if let path = LaunchArgs.value("--import") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 let r = self.board?.library.importItems([URL(fileURLWithPath: path)])
                 print("IMPORT: added=\(r?.added ?? -1) rejected=\(r?.rejected ?? [])")
                 fflush(stdout); exit(0)
+            }
+        }
+        if LaunchArgs.args.contains("--keytest") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runKeytest() }
+        }
+        if LaunchArgs.args.contains("--recorder") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                if let board = self.board, let first = board.library.sounds.first { board.startRecording(first) }
             }
         }
         if LaunchArgs.args.contains("--selftest") {
@@ -47,11 +57,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Ganzes Fenster inkl. Titelleiste und Toolbar als PNG
     private static func snapshot(to path: String) {
-        guard let window = NSApp.windows.first(where: { $0.isVisible }),
-              let frameView = window.contentView?.superview,
-              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { return }
+        guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) else {
+            print("SNAPSHOT: kein Fenster – \(NSApp.windows.map { "\(type(of: $0)) visible=\($0.isVisible)" })"); return
+        }
+        guard let frameView = window.contentView?.superview,
+              let rep = frameView.bitmapImageRepForCachingDisplay(in: frameView.bounds) else { print("SNAPSHOT: kein Bild"); return }
         frameView.cacheDisplay(in: frameView.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+    }
+
+    private func runKeytest() {
+        guard let board, let sound = board.library.sounds.first else { print("KEYTEST: keine Sounds"); exit(1) }
+        func status() -> String {
+            let binds = board.keys.binds
+            let shown = board.library.sounds.prefix(3).map { "\($0.title)=\(binds[$0.id]?.display ?? "–")" }
+            return "binds=\(binds.count) erste: \(shown.joined(separator: ", ")) global=\(board.hotKeyState(for: sound))"
+        }
+        print("KEYTEST vorher: \(status())")
+        // ⌃⌥K: keyCode 40
+        board.keys.set(KeyBind(keyCode: 40, flags: [.control, .option]), for: sound.id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            print("KEYTEST nachher: \(status())")
+            fflush(stdout)
+            exit(0)
+        }
     }
 
     private func runSelftest() {
@@ -72,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 @main
-struct MemeSoundboardApp: App {
+struct ClipSoundApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var board: Board
 
@@ -82,7 +111,7 @@ struct MemeSoundboardApp: App {
     }
 
     var body: some Scene {
-        Window("Meme Soundboard", id: "main") {
+        Window("ClipSound", id: "main") {
             ContentView(board: board)
                 .frame(minWidth: 620, minHeight: 380)
                 .onAppear { delegate.board = board }
@@ -123,6 +152,6 @@ struct PlaybackCommands: View {
         Button("Lautstärke auf 100 %") { player.volume = 1 }
             .keyboardShortcut("0")
         Divider()
-        Text("1–0 und Q–P spielen die ersten 20 Sounds")
+        Text("Tasten: Rechtsklick auf einen Sound → Taste festlegen")
     }
 }

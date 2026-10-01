@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace MemeSoundboard;
+namespace ClipSound;
 
 public partial class App : Application
 {
@@ -9,7 +9,7 @@ public partial class App : Application
         // Unerwartete Fehler anzeigen statt kommentarlos abzustürzen
         DispatcherUnhandledException += (_, args) =>
         {
-            MessageBox.Show(args.Exception.Message, "Meme Soundboard – Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
+            MessageBox.Show(args.Exception.Message, "ClipSound – Fehler", MessageBoxButton.OK, MessageBoxImage.Error);
             args.Handled = true;
         };
         base.OnStartup(e);

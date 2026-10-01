@@ -18,12 +18,24 @@ final class SoundLibrary: ObservableObject {
     let folder: URL
     @Published private(set) var sounds: [Sound] = []
 
+    /// ~/Library/Application Support/ClipSound – übernimmt einmalig den alten „Meme Soundboard“-Ordner
+    static let supportFolder: URL = {
+        let fm = FileManager.default
+        let support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let folder = support.appendingPathComponent("ClipSound", isDirectory: true)
+        let old = support.appendingPathComponent("Meme Soundboard", isDirectory: true)
+        if !fm.fileExists(atPath: folder.path), fm.fileExists(atPath: old.path) {
+            try? fm.moveItem(at: old, to: folder)
+        }
+        try? fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }()
+
     init(folder: URL? = nil) {
         if let folder {
             self.folder = folder
         } else {
-            let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            self.folder = support.appendingPathComponent("Meme Soundboard/Sounds", isDirectory: true)
+            self.folder = Self.supportFolder.appendingPathComponent("Sounds", isDirectory: true)
         }
         try? FileManager.default.createDirectory(at: self.folder, withIntermediateDirectories: true)
         reload()

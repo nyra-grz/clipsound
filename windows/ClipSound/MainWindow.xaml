@@ -1,0 +1,247 @@
+<Window x:Class="ClipSound.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:ClipSound"
+        Title="ClipSound" Width="1100" Height="700" MinWidth="560" MinHeight="420"
+        AllowDrop="True" Icon="AppIcon.ico" Focusable="True" FocusVisualStyle="{x:Null}"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
+        <!-- Kleiner Tasten-Knopf oben rechts auf der Kachel -->
+        <Style x:Key="KeyBadge" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="B" CornerRadius="4" Padding="6,1" Background="{DynamicResource SubtleFillColorSecondaryBrush}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="B" Property="Background" Value="{DynamicResource SubtleFillColorTertiaryBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Eine Sound-Kachel -->
+        <DataTemplate x:Key="TileTemplate" DataType="{x:Type local:TileViewModel}">
+            <Grid x:Name="Root">
+                <Border x:Name="Card" CornerRadius="8" BorderThickness="1" Padding="12,10" Cursor="Hand"
+                        Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                        ToolTip="{Binding FileName}" MouseLeftButtonDown="Tile_MouseDown">
+                    <Border.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Abspielen" Click="Menu_Play"/>
+                            <MenuItem Header="Taste festlegen …" Click="Menu_Key"/>
+                            <MenuItem Header="Im Explorer zeigen" Click="Menu_Reveal"/>
+                            <Separator/>
+                            <MenuItem Header="Löschen …" Click="Menu_Delete"/>
+                        </ContextMenu>
+                    </Border.ContextMenu>
+                    <Grid>
+                        <TextBlock x:Name="Icon" Text="&#xE8D6;" FontFamily="{StaticResource IconFont}" FontSize="16"
+                                   Foreground="{Binding Tint}" HorizontalAlignment="Left" VerticalAlignment="Top"/>
+                        <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextWrapping="Wrap"
+                                   TextTrimming="CharacterEllipsis" MaxHeight="40" VerticalAlignment="Bottom"
+                                   Foreground="{DynamicResource TextFillColorPrimaryBrush}"/>
+                        <local:ProgressLine x:Name="Progress" Height="3" Margin="0,0,0,-6" VerticalAlignment="Bottom"
+                                            Progress="{Binding Progress}" Fill="{Binding Tint}" Visibility="Collapsed"/>
+                    </Grid>
+                </Border>
+
+                <!-- Taste -->
+                <Button x:Name="KeyButton" Style="{StaticResource KeyBadge}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="8" Click="Key_Click" ToolTip="{Binding KeyToolTip}"
+                        Visibility="{Binding HasKey, Converter={StaticResource BoolToVis}}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="GlobalIcon" Text="&#xE774;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                   Margin="0,0,4,0" VerticalAlignment="Center" Visibility="Collapsed"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="FailedIcon" Text="&#xE7BA;" FontFamily="{StaticResource IconFont}" FontSize="10"
+                                   Margin="0,0,4,0" VerticalAlignment="Center" Visibility="Collapsed"
+                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                        <TextBlock Text="{Binding KeyText}" FontFamily="Cascadia Mono, Consolas" FontSize="11"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+                </Button>
+                <!-- Noch keine Taste: beim Drüberfahren anbieten -->
+                <Button x:Name="AddKeyButton" Style="{StaticResource KeyBadge}" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="8" Click="Key_Click" ToolTip="Taste festlegen" Visibility="Collapsed">
+                    <TextBlock Text="&#xE765;" FontFamily="{StaticResource IconFont}" FontSize="12"
+                               Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                </Button>
+            </Grid>
+
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Card" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Card" Property="Background" Value="{DynamicResource CardBackgroundFillColorSecondaryBrush}"/>
+                </Trigger>
+                <Trigger SourceName="Root" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="AddKeyButton" Property="Visibility" Value="Visible"/>
+                </Trigger>
+                <DataTrigger Binding="{Binding HasKey}" Value="True">
+                    <Setter TargetName="AddKeyButton" Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HotKeyState}" Value="global">
+                    <Setter TargetName="GlobalIcon" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HotKeyState}" Value="failed">
+                    <Setter TargetName="FailedIcon" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                    <Setter TargetName="Card" Property="BorderBrush" Value="{Binding Tint}"/>
+                    <Setter TargetName="Icon" Property="Text" Value="&#xE767;"/>
+                    <Setter TargetName="Progress" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Befehlsleiste -->
+        <Grid Margin="16,12,16,8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <WrapPanel VerticalAlignment="Center">
+                <Button x:Name="ImportBtn" Style="{DynamicResource AccentButtonStyle}" Click="Import_Click" Margin="0,0,8,0"
+                        ToolTip="Sound-Dateien oder einen Ordner importieren (Strg+O)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE710;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Importieren"/>
+                    </StackPanel>
+                    <Button.ContextMenu>
+                        <ContextMenu>
+                            <MenuItem Header="Dateien auswählen …" Click="ImportFiles_Click"/>
+                            <MenuItem Header="Ganzen Ordner importieren …" Click="ImportFolder_Click"/>
+                        </ContextMenu>
+                    </Button.ContextMenu>
+                </Button>
+                <Button x:Name="StopBtn" Click="Stop_Click" Margin="0,0,8,0" ToolTip="Alles stoppen (Esc)" IsEnabled="False">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE71A;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Stop"/>
+                    </StackPanel>
+                </Button>
+                <ToggleButton x:Name="Overlap" Margin="0,0,16,0" ToolTip="Mehrere Sounds gleichzeitig abspielen"
+                              Checked="Overlap_Changed" Unchecked="Overlap_Changed">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8C8;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Überlappen"/>
+                    </StackPanel>
+                </ToggleButton>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Lautstärke · Klick auf die Zahl = 100 %">
+                    <TextBlock Text="&#xE767;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <Slider x:Name="Volume" Width="130" Margin="8,0" Minimum="0" Maximum="5" SmallChange="0.05" LargeChange="0.25"
+                            IsMoveToPointEnabled="True" VerticalAlignment="Center" ValueChanged="Volume_Changed"/>
+                    <TextBlock x:Name="VolumeText" Text="80 %" Width="46" TextAlignment="Right" VerticalAlignment="Center"
+                               Cursor="Hand" MouseLeftButtonDown="VolumeText_Click"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </WrapPanel>
+
+            <TextBlock x:Name="CountText" Grid.Column="1" Text="" Margin="16,0" VerticalAlignment="Center" HorizontalAlignment="Right"
+                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+
+            <!-- Suche -->
+            <Grid Grid.Column="2" Width="240" VerticalAlignment="Center">
+                <TextBox x:Name="Search" TextChanged="Search_TextChanged" VerticalContentAlignment="Center"/>
+                <TextBlock x:Name="SearchPlaceholder" Text="Suchen (Strg+F)" Margin="12,0,0,0" VerticalAlignment="Center"
+                           IsHitTestVisible="False" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+            </Grid>
+        </Grid>
+
+        <Grid Grid.Row="1">
+            <!-- Kacheln -->
+            <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
+                <ItemsControl x:Name="Tiles" ItemTemplate="{StaticResource TileTemplate}" Margin="16,4,16,16" Focusable="False">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <local:TileGrid MinTileWidth="180" TileHeight="86" Spacing="8"/>
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                </ItemsControl>
+            </ScrollViewer>
+
+            <!-- Keine Sounds -->
+            <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock Text="&#xE8D6;" FontFamily="{StaticResource IconFont}" FontSize="48" HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                <TextBlock Text="Keine Sounds" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,16,0,4"/>
+                <TextBlock Text="Zieh Sound-Dateien oder einen ganzen Ordner in dieses Fenster." HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,20,0,0">
+                    <Button Style="{DynamicResource AccentButtonStyle}" Click="ImportFiles_Click" Content="Dateien importieren …"/>
+                    <Button Margin="8,0,0,0" Click="ImportFolder_Click" Content="Ordner importieren …"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Keine Treffer -->
+            <StackPanel x:Name="NoResults" HorizontalAlignment="Center" VerticalAlignment="Center" Visibility="Collapsed">
+                <TextBlock Text="&#xE721;" FontFamily="{StaticResource IconFont}" FontSize="40" HorizontalAlignment="Center"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                <TextBlock x:Name="NoResultsText" FontSize="16" FontWeight="SemiBold" HorizontalAlignment="Center" Margin="0,12,0,0"/>
+            </StackPanel>
+
+            <!-- Beim Reinziehen -->
+            <Border x:Name="DropOverlay" Margin="8" CornerRadius="8" BorderThickness="2" Visibility="Collapsed" IsHitTestVisible="False"
+                    BorderBrush="{DynamicResource AccentFillColorDefaultBrush}">
+                <Border Background="{DynamicResource AccentFillColorDefaultBrush}" Opacity="0.08" CornerRadius="6"/>
+            </Border>
+        </Grid>
+
+        <!-- Taste aufnehmen -->
+        <Grid x:Name="Recorder" Grid.RowSpan="2" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
+              MouseLeftButtonDown="RecorderBackground_MouseDown">
+            <Border Width="380" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24" CornerRadius="8" BorderThickness="1"
+                    Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    MouseLeftButtonDown="RecorderCard_MouseDown">
+                <StackPanel>
+                    <TextBlock x:Name="RecorderTitle" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" TextAlignment="Center"/>
+                    <Border HorizontalAlignment="Center" MinWidth="110" Margin="0,16" Padding="16,10" CornerRadius="6"
+                            Background="{DynamicResource ControlFillColorSecondaryBrush}"
+                            BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                        <TextBlock x:Name="RecorderKey" FontFamily="Cascadia Mono, Consolas" FontSize="22" TextAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="Drück eine Taste oder Kombination." TextAlignment="Center"
+                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <Grid Margin="0,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="&#xE774;" FontFamily="{StaticResource IconFont}" Margin="0,2,8,0"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Mit Umschalt + Strg oder Alt geht sie auch, wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord."/>
+                    </Grid>
+                    <TextBlock x:Name="RecorderNote" Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Visibility="Collapsed"
+                               Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                    <Grid Margin="0,20,0,0">
+                        <Button x:Name="RemoveKeyBtn" Content="Taste entfernen" HorizontalAlignment="Left" Click="RemoveKey_Click"
+                                Focusable="False" ToolTip="Rücktaste"/>
+                        <Button Content="Fertig" Style="{DynamicResource AccentButtonStyle}" HorizontalAlignment="Right"
+                                Click="RecorderDone_Click" Focusable="False" ToolTip="Esc"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>

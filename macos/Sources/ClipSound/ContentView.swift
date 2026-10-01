@@ -1,17 +1,41 @@
 import SwiftUI
+import Combine
 import UniformTypeIdentifiers
 
-let shortcutKeys: [Character] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "q", "w", "e", "r", "t", "z", "u", "i", "o", "p"]
-
-/// Hält den Suchtext und verbindet Bibliothek + Player
+/// Verbindet Bibliothek, Player und Tastenkürzel
 final class Board: ObservableObject {
     let library: SoundLibrary
     let player = SoundPlayer()
+    let keys: KeyBindStore
+    private let hotKeys = GlobalHotKeys.shared
+
     @Published var query = ""
     @Published var searchFocused = false
     @Published var problem: String?
+    /// Sound, für den gerade eine Taste aufgenommen wird
+    @Published var recording: Sound?
+    @Published var recorderNote: String?
+    /// Erhöht sich, wenn sich die globalen Kürzel ändern (für die Anzeige)
+    @Published private(set) var hotKeyRevision = 0
 
-    init(library: SoundLibrary) { self.library = library }
+    private var subscriptions: Set<AnyCancellable> = []
+
+    init(library: SoundLibrary) {
+        self.library = library
+        keys = KeyBindStore(file: library.folder.deletingLastPathComponent().appendingPathComponent("keybinds.json"))
+
+        hotKeys.onPress = { [weak self] id in
+            guard let self, self.recording == nil, let sound = self.library.sounds.first(where: { $0.id == id }) else { return }
+            self.play(sound)
+        }
+        library.$sounds
+            .sink { [weak self] sounds in self?.keys.sync(with: sounds) }
+            .store(in: &subscriptions)
+        keys.$binds
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.registerHotKeys() }
+            .store(in: &subscriptions)
+    }
 
     var visible: [Sound] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -21,6 +45,62 @@ final class Board: ObservableObject {
     func play(_ sound: Sound) {
         if !player.play(sound) { problem = "„\(sound.title)“ konnte nicht abgespielt werden." }
     }
+
+    func delete(_ sound: Sound) {
+        keys.set(nil, for: sound.id)
+        library.delete(sound)
+    }
+
+    func hotKeyState(for sound: Sound) -> HotKeyState {
+        guard keys.binds[sound.id]?.isGlobal == true else { return .local }
+        if hotKeys.active.contains(sound.id) { return .global }
+        return hotKeys.failed.contains(sound.id) ? .failed : .local
+    }
+
+    enum HotKeyState { case local, global, failed }
+
+    private func registerHotKeys() {
+        guard recording == nil else { return }
+        hotKeys.register(keys.binds)
+        hotKeyRevision += 1
+    }
+
+    // MARK: Taste aufnehmen
+
+    func startRecording(_ sound: Sound) {
+        hotKeys.unregisterAll() // sonst würde eine schon vergebene Kombi abspielen statt aufnehmen
+        recorderNote = nil
+        recording = sound
+    }
+
+    func stopRecording() {
+        recording = nil
+        recorderNote = nil
+        registerHotKeys()
+    }
+
+    func removeBind() {
+        guard let sound = recording else { return }
+        keys.set(nil, for: sound.id)
+        stopRecording()
+    }
+
+    private func record(_ event: NSEvent) {
+        guard let sound = recording else { return }
+        let bind = KeyBind(event: event)
+        if bind.flags.contains(.command) {
+            recorderNote = "Kombinationen mit ⌘ sind für Menübefehle reserviert."
+            return
+        }
+        if let previous = keys.set(bind, for: sound.id) {
+            let name = library.sounds.first { $0.id == previous }?.title ?? previous
+            recorderNote = "\(bind.display) war bei „\(name)“ – dort ist sie jetzt entfernt."
+            return // offen lassen, damit man den Hinweis sieht
+        }
+        stopRecording()
+    }
+
+    // MARK: Import
 
     func importItems(_ urls: [URL]) {
         let result = library.importItems(urls)
@@ -42,17 +122,29 @@ final class Board: ObservableObject {
         if panel.runModal() == .OK { importItems(panel.urls) }
     }
 
-    /// Tastenkürzel 1–0, Q–P, Esc und / – liefert true, wenn die Taste verbraucht wurde
+    /// Tasten im ClipSound-Fenster – liefert true, wenn die Taste verbraucht wurde
     func handleKey(_ event: NSEvent, typingInSearch: Bool) -> Bool {
-        if event.keyCode == 53 { // Esc: stoppt alles, im Suchfeld darf Esc zusätzlich leeren
+        if recording != nil {
+            switch event.keyCode {
+            case 53: stopRecording()                 // Esc: abbrechen
+            case 51, 117: removeBind()               // ⌫ / ⌦: Taste entfernen
+            default: record(event)
+            }
+            return true
+        }
+        if event.keyCode == 53 { // Esc stoppt alles, im Suchfeld darf Esc zusätzlich leeren
             player.stopAll()
             return !typingInSearch
         }
-        guard !typingInSearch,
-              event.modifierFlags.intersection([.command, .control, .option]).isEmpty,
-              let ch = event.charactersIgnoringModifiers?.lowercased().first else { return false }
-        if ch == "/" { searchFocused = true; return true }
-        if let i = shortcutKeys.firstIndex(of: ch), i < visible.count { play(visible[i]); return true }
+        guard !typingInSearch else { return false }
+        if event.modifierFlags.contains(.command) { return false } // Menübefehle
+        if let id = keys.soundID(for: event),
+           !hotKeys.active.contains(id), // globale Kürzel feuern schon über Carbon
+           let sound = library.sounds.first(where: { $0.id == id }) {
+            play(sound)
+            return true
+        }
+        if event.charactersIgnoringModifiers == "/" { searchFocused = true; return true }
         return false
     }
 }
@@ -61,6 +153,7 @@ struct ContentView: View {
     @ObservedObject var board: Board
     @ObservedObject var library: SoundLibrary
     @ObservedObject var player: SoundPlayer
+    @ObservedObject var keys: KeyBindStore
     @State private var dropTargeted = false
     @State private var pendingDelete: Sound?
 
@@ -68,6 +161,7 @@ struct ContentView: View {
         self.board = board
         self.library = board.library
         self.player = board.player
+        self.keys = board.keys
     }
 
     var body: some View {
@@ -91,21 +185,22 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
         .overlay { if dropTargeted { dropHighlight } }
+        .overlay { if let sound = board.recording { recorder(for: sound) } }
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
             loadDropped(providers)
             return true
         }
-        .navigationTitle("Meme Soundboard")
+        .navigationTitle("ClipSound")
         .navigationSubtitle(library.sounds.count == 1 ? "1 Sound" : "\(library.sounds.count) Sounds")
         .searchable(text: $board.query, isPresented: $board.searchFocused, placement: .toolbar, prompt: "Suchen")
         .onSubmit(of: .search) { if let first = board.visible.first { board.play(first) } }
         .toolbar { toolbar }
         .confirmationDialog("„\(pendingDelete?.title ?? "")“ löschen?", isPresented: deleteDialogShown, presenting: pendingDelete) { sound in
-            Button("In den Papierkorb legen", role: .destructive) { library.delete(sound) }
+            Button("In den Papierkorb legen", role: .destructive) { board.delete(sound) }
         } message: { _ in
             Text("Die Datei wird in den Papierkorb verschoben.")
         }
-        .alert("Import", isPresented: problemShown, presenting: board.problem) { _ in
+        .alert("ClipSound", isPresented: problemShown, presenting: board.problem) { _ in
             Button("OK") {}
         } message: { text in
             Text(text)
@@ -115,14 +210,16 @@ struct ContentView: View {
     private var grid: some View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
-                ForEach(Array(board.visible.enumerated()), id: \.element.id) { i, sound in
+                ForEach(board.visible) { sound in
                     PadView(sound: sound,
-                            key: i < shortcutKeys.count ? String(shortcutKeys[i]).uppercased() : nil,
-                            progress: player.progress[sound.id]) {
-                        board.play(sound)
-                    }
+                            bind: keys.binds[sound.id],
+                            hotKey: board.hotKeyState(for: sound),
+                            progress: player.progress[sound.id],
+                            onPlay: { board.play(sound) },
+                            onEditKey: { board.startRecording(sound) })
                     .contextMenu {
                         Button("Abspielen", systemImage: "play") { board.play(sound) }
+                        Button("Taste festlegen …", systemImage: "keyboard") { board.startRecording(sound) }
                         Button("Im Finder zeigen", systemImage: "folder") { library.revealInFinder(sound) }
                         Divider()
                         Button("Löschen …", systemImage: "trash", role: .destructive) { pendingDelete = sound }
@@ -130,6 +227,7 @@ struct ContentView: View {
                 }
             }
             .padding(16)
+            .id(board.hotKeyRevision)
         }
     }
 
@@ -149,6 +247,54 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             VolumeControl(volume: $player.volume)
+        }
+    }
+
+    // MARK: Taste aufnehmen
+
+    private func recorder(for sound: Sound) -> some View {
+        let bind = keys.binds[sound.id]
+        return ZStack {
+            Color.black.opacity(0.25).ignoresSafeArea()
+                .onTapGesture { board.stopRecording() }
+            VStack(spacing: 14) {
+                Text("Taste für „\(sound.title)“")
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                Text(bind?.display ?? "–")
+                    .font(.system(size: 28, weight: .medium).monospaced())
+                    .frame(minWidth: 90, minHeight: 54)
+                    .padding(.horizontal, 14)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                Text("Drück eine Taste oder Kombination.")
+                    .foregroundStyle(.secondary)
+                Label("Mit ⌃ (ctrl) geht sie auch, wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord.",
+                      systemImage: "globe")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: 300)
+                if let note = board.recorderNote {
+                    Text(note)
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 300)
+                }
+                HStack {
+                    Button("Taste entfernen", action: board.removeBind)
+                        .disabled(bind == nil)
+                        .help("⌫")
+                    Spacer()
+                    Button("Fertig", action: board.stopRecording)
+                        .keyboardShortcut(.defaultAction)
+                        .help("Esc")
+                }
+                .frame(width: 300)
+            }
+            .padding(24)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
         }
     }
 
@@ -210,9 +356,11 @@ struct VolumeControl: View {
 
 struct PadView: View {
     let sound: Sound
-    let key: String?
+    let bind: KeyBind?
+    let hotKey: Board.HotKeyState
     let progress: Double?
-    let action: () -> Void
+    let onPlay: () -> Void
+    let onEditKey: () -> Void
 
     @State private var hovering = false
 
@@ -228,24 +376,13 @@ struct PadView: View {
         let playing = progress != nil
         let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
 
-        Button(action: action) {
+        Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 0) {
-                HStack(alignment: .top) {
-                    Image(systemName: playing ? "speaker.wave.2.fill" : "waveform")
-                        .symbolEffect(.variableColor.iterative, isActive: playing)
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(tint)
-                        .frame(width: 22, height: 18, alignment: .leading)
-                    Spacer(minLength: 4)
-                    if let key {
-                        Text(key)
-                            .font(.system(size: 11, weight: .medium).monospaced())
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                    }
-                }
+                Image(systemName: playing ? "speaker.wave.2.fill" : "waveform")
+                    .symbolEffect(.variableColor.iterative, isActive: playing)
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(tint)
+                    .frame(width: 22, height: 20, alignment: .leading)
                 Spacer(minLength: 6)
                 Text(sound.title)
                     .font(.system(size: 13, weight: .medium))
@@ -255,7 +392,7 @@ struct PadView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(10)
-            .frame(height: 76)
+            .frame(height: 86)
             .background {
                 shape.fill(playing ? AnyShapeStyle(tint.opacity(0.14)) : AnyShapeStyle(hovering ? .quaternary : .quinary))
             }
@@ -274,8 +411,49 @@ struct PadView: View {
             .contentShape(shape)
         }
         .buttonStyle(PadButtonStyle())
+        // Tasten-Badge liegt außerhalb des Kachel-Buttons, damit er eigene Klicks bekommt
+        .overlay(alignment: .topTrailing) { keyBadge.padding(8) }
         .onHover { hovering = $0 }
         .help(sound.id)
+    }
+
+    @ViewBuilder private var keyBadge: some View {
+        if let bind {
+            Button(action: onEditKey) {
+                HStack(spacing: 3) {
+                    if hotKey == .global {
+                        Image(systemName: "globe").font(.system(size: 9, weight: .semibold))
+                    } else if hotKey == .failed {
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                    }
+                    Text(bind.display).font(.system(size: 11, weight: .medium).monospaced())
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help(badgeHelp)
+        } else if hovering {
+            Button(action: onEditKey) {
+                Image(systemName: "keyboard")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+            }
+            .buttonStyle(.plain)
+            .help("Taste festlegen")
+        }
+    }
+
+    private var badgeHelp: String {
+        switch hotKey {
+        case .global: "Funktioniert auch im Hintergrund · Klicken zum Ändern"
+        case .failed: "Diese Kombination nutzt schon eine andere App – nur im ClipSound-Fenster aktiv · Klicken zum Ändern"
+        case .local: "Nur im ClipSound-Fenster · Klicken zum Ändern"
+        }
     }
 }
 

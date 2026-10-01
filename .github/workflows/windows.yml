@@ -1,0 +1,59 @@
+name: Windows
+
+on:
+  push:
+    paths: ['windows/**', '.github/workflows/windows.yml']
+  workflow_dispatch:
+
+jobs:
+  build-and-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Bauen
+        run: dotnet publish windows/ClipSound -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:DebugType=none -o out
+
+      - name: Test-Sounds erzeugen (Sinustöne)
+        shell: pwsh
+        run: |
+          $dir = "$pwd\testlib\Sounds"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          New-Item -ItemType Directory -Force "$pwd\empty\Sounds" | Out-Null
+          New-Item -ItemType Directory -Force "$pwd\shots" | Out-Null
+          $names = 'vine-boom','bruh','airhorn','metal-pipe-clang','sad-violin','wow','oof','emotional-damage','windows-error','taco-bell-bong','among-us-drip-theme-song','dun-dun-dun'
+          $i = 0
+          foreach ($n in $names) {
+            $rate = 22050; $count = 22050; $freq = 220 + 40 * $i; $i++
+            $ms = New-Object IO.MemoryStream; $bw = New-Object IO.BinaryWriter($ms)
+            $bw.Write([Text.Encoding]::ASCII.GetBytes('RIFF')); $bw.Write([int](36 + $count * 2))
+            $bw.Write([Text.Encoding]::ASCII.GetBytes('WAVEfmt ')); $bw.Write([int]16); $bw.Write([int16]1); $bw.Write([int16]1)
+            $bw.Write([int]$rate); $bw.Write([int]($rate * 2)); $bw.Write([int16]2); $bw.Write([int16]16)
+            $bw.Write([Text.Encoding]::ASCII.GetBytes('data')); $bw.Write([int]($count * 2))
+            for ($s = 0; $s -lt $count; $s++) { $bw.Write([int16](8000 * [Math]::Sin(2 * [Math]::PI * $freq * $s / $rate))) }
+            [IO.File]::WriteAllBytes("$dir\$n.wav", $ms.ToArray())
+          }
+
+      - name: App starten – Screenshots und Selbsttest
+        shell: pwsh
+        run: |
+          function Run($argList) {
+            $p = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList $argList -PassThru
+            if (-not $p.WaitForExit(90000)) { $p.Kill(); Write-Host "Zeitüberschreitung: $argList" }
+          }
+          Run @('--library', "$pwd\testlib\Sounds", '--snapshot', "$pwd\shots\1-normal.png", '--selftest', "$pwd\shots\selftest.txt")
+          Run @('--library', "$pwd\testlib\Sounds", '--size', '700x600', '--snapshot', "$pwd\shots\2-schmal.png", '--selftest', "$pwd\shots\selftest-schmal.txt")
+          Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
+          Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
+          Get-ChildItem shots
+          Get-Content shots\*.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-check
+          path: shots

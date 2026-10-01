@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "MemeSoundboard",
+    name: "ClipSound",
     platforms: [.macOS("15.0")],
     targets: [
-        .executableTarget(name: "MemeSoundboard", path: "Sources/MemeSoundboard")
+        .executableTarget(name: "ClipSound", path: "Sources/ClipSound")
     ]
 )

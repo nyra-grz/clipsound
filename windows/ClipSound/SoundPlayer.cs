@@ -2,7 +2,7 @@ using NAudio.Vorbis;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
-namespace MemeSoundboard;
+namespace ClipSound;
 
 /// <summary>
 /// Spielt Sounds über einen gemeinsamen Mixer ab. Die Master-Lautstärke geht bis 500 %.

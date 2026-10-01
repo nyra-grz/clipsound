@@ -1,7 +1,7 @@
 using System.IO;
 using System.Text.RegularExpressions;
 
-namespace MemeSoundboard;
+namespace ClipSound;
 
 public sealed record Sound(string Path)
 {
@@ -11,7 +11,7 @@ public sealed record Sound(string Path)
     public string Title => Regex.Replace(System.IO.Path.GetFileNameWithoutExtension(Path), "[-_]+", " ");
 }
 
-/// <summary>Der Sound-Ordner der App unter %AppData%\Meme Soundboard\Sounds (startet leer).</summary>
+/// <summary>Der Sound-Ordner der App unter %AppData%\ClipSound\Sounds (startet leer).</summary>
 public sealed class SoundLibrary
 {
     public static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -22,9 +22,27 @@ public sealed class SoundLibrary
     public string Folder { get; }
     public List<Sound> Sounds { get; private set; } = new();
 
-    public SoundLibrary()
+    /// <summary>%AppData%\ClipSound – übernimmt einmalig den alten „Meme Soundboard“-Ordner.</summary>
+    public static string SupportFolder { get; } = CreateSupportFolder();
+
+    private static string CreateSupportFolder()
     {
-        Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Meme Soundboard", "Sounds");
+        var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        var folder = Path.Combine(appData, "ClipSound");
+        var old = Path.Combine(appData, "Meme Soundboard");
+        try
+        {
+            if (!Directory.Exists(folder) && Directory.Exists(old)) Directory.Move(old, folder);
+        }
+        catch { /* dann eben neu anfangen */ }
+        Directory.CreateDirectory(folder);
+        return folder;
+    }
+
+    /// <param name="folder">Anderer Sound-Ordner (nur zum Testen)</param>
+    public SoundLibrary(string? folder = null)
+    {
+        Folder = folder ?? Path.Combine(SupportFolder, "Sounds");
         Directory.CreateDirectory(Folder);
         Reload();
     }
