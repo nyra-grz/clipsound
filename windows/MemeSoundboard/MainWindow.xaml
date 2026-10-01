@@ -1,0 +1,287 @@
+<Window x:Class="MemeSoundboard.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:MemeSoundboard"
+        Title="Meme Soundboard" Width="1200" Height="740" MinWidth="980" MinHeight="480"
+        Background="{StaticResource Bg}" Foreground="{StaticResource Text}"
+        FontFamily="Segoe UI Variable Text, Segoe UI" FontSize="14"
+        AllowDrop="True" Icon="AppIcon.ico" Focusable="True" FocusVisualStyle="{x:Null}"
+        UseLayoutRounding="True" TextOptions.TextFormattingMode="Display"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
+        <!-- Eine Sound-Kachel -->
+        <DataTemplate x:Key="PadTemplate" DataType="{x:Type local:PadViewModel}">
+            <Grid x:Name="Root" Margin="6" Height="104" Cursor="Hand" ToolTip="{Binding FileName}" Background="Transparent"
+                  MouseLeftButtonDown="Pad_MouseDown" RenderTransformOrigin="0.5,0.5">
+                <Grid.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Abspielen" Click="Menu_Play"/>
+                        <MenuItem Header="Im Explorer zeigen" Click="Menu_Reveal"/>
+                        <Separator/>
+                        <MenuItem Header="Löschen" Click="Menu_Delete"/>
+                    </ContextMenu>
+                </Grid.ContextMenu>
+
+                <!-- Fläche mit Verlauf und Schatten in der Kachelfarbe -->
+                <Border x:Name="Card" CornerRadius="18" Background="{Binding Background}">
+                    <Border.Effect>
+                        <DropShadowEffect Color="{Binding Glow}" BlurRadius="20" ShadowDepth="5" Direction="270" Opacity="0.35"/>
+                    </Border.Effect>
+                </Border>
+                <!-- Leuchten beim Abspielen (eigene Ebene, damit die Bindung pro Kachel gilt) -->
+                <Border x:Name="Glow" CornerRadius="18" Background="{Binding Background}" Visibility="Collapsed" IsHitTestVisible="False">
+                    <Border.Effect>
+                        <DropShadowEffect Color="{Binding Glow}" BlurRadius="28" ShadowDepth="0" Opacity="0.75"/>
+                    </Border.Effect>
+                </Border>
+                <!-- Glanz -->
+                <Border CornerRadius="18" IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="0.6,0.7">
+                            <GradientStop Color="#47FFFFFF" Offset="0"/>
+                            <GradientStop Color="#00FFFFFF" Offset="1"/>
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+                <!-- Rahmen beim Abspielen -->
+                <Border x:Name="Ring" CornerRadius="18" BorderBrush="White" BorderThickness="3" Visibility="Collapsed" IsHitTestVisible="False"/>
+
+                <!-- Taste -->
+                <Border HorizontalAlignment="Left" VerticalAlignment="Top" Margin="10" MinWidth="22" Height="22" Padding="5,0"
+                        CornerRadius="7" Background="#38000000" BorderBrush="#40FFFFFF" BorderThickness="1"
+                        Visibility="{Binding KeyVisibility}">
+                    <TextBlock Text="{Binding Key}" FontFamily="{StaticResource Mono}" FontSize="11" FontWeight="Bold"
+                               Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+
+                <!-- Name -->
+                <TextBlock x:Name="Name" Text="{Binding Title}" Foreground="White" FontSize="15" FontWeight="Bold"
+                           TextWrapping="Wrap" TextTrimming="CharacterEllipsis" MaxHeight="58"
+                           VerticalAlignment="Bottom" Margin="14,0,14,12">
+                    <TextBlock.Effect><DropShadowEffect BlurRadius="3" ShadowDepth="1" Direction="270" Opacity="0.45"/></TextBlock.Effect>
+                </TextBlock>
+
+                <!-- Equalizer-Animation -->
+                <StackPanel x:Name="Wave" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                            Margin="0,0,13,13" Height="16" Visibility="Collapsed">
+                    <Rectangle x:Name="W1" Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Fill="White" Margin="0,0,3,0" RenderTransformOrigin="0.5,1">
+                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.25"/></Rectangle.RenderTransform>
+                    </Rectangle>
+                    <Rectangle x:Name="W2" Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Fill="White" Margin="0,0,3,0" RenderTransformOrigin="0.5,1">
+                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.25"/></Rectangle.RenderTransform>
+                    </Rectangle>
+                    <Rectangle x:Name="W3" Width="3" Height="16" RadiusX="1.5" RadiusY="1.5" Fill="White" RenderTransformOrigin="0.5,1">
+                        <Rectangle.RenderTransform><ScaleTransform ScaleY="0.25"/></Rectangle.RenderTransform>
+                    </Rectangle>
+                </StackPanel>
+
+                <!-- Fortschritt -->
+                <Grid x:Name="ProgressHost" VerticalAlignment="Bottom" Height="4" Margin="12,0,12,5" Visibility="Collapsed">
+                    <local:ProgressFill Progress="{Binding Progress}"/>
+                </Grid>
+
+                <!-- Löschen -->
+                <Button x:Name="Del" HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8" MinWidth="26" Height="26"
+                        Content="{Binding DeleteLabel}" Click="Delete_Click" Visibility="Hidden" Cursor="Hand"
+                        Foreground="White" FontSize="12" FontWeight="Bold">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="B" CornerRadius="8" Background="#47000000" Padding="7,0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="B" Property="Background" Value="#73000000"/>
+                                </Trigger>
+                                <DataTrigger Binding="{Binding ConfirmDelete}" Value="True">
+                                    <Setter TargetName="B" Property="Background" Value="#FF3B5C"/>
+                                </DataTrigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+
+            <DataTemplate.Triggers>
+                <Trigger SourceName="Root" Property="IsMouseOver" Value="True">
+                    <Setter TargetName="Del" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Root" Property="Margin" Value="6,4,6,8"/>
+                </Trigger>
+                <DataTrigger Binding="{Binding ConfirmDelete}" Value="True">
+                    <Setter TargetName="Del" Property="Visibility" Value="Visible"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                    <Setter TargetName="Ring" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Wave" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="ProgressHost" Property="Visibility" Value="Visible"/>
+                    <Setter TargetName="Name" Property="Margin" Value="14,0,40,12"/>
+                    <Setter TargetName="Glow" Property="Visibility" Value="Visible"/>
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard x:Name="WaveAnim">
+                            <Storyboard RepeatBehavior="Forever" AutoReverse="True">
+                                <DoubleAnimation Storyboard.TargetName="W1" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.25" To="1" Duration="0:0:0.4"/>
+                                <DoubleAnimation Storyboard.TargetName="W2" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="1" To="0.25" Duration="0:0:0.4"/>
+                                <DoubleAnimation Storyboard.TargetName="W3" Storyboard.TargetProperty="(UIElement.RenderTransform).(ScaleTransform.ScaleY)" From="0.5" To="1" Duration="0:0:0.4" BeginTime="0:0:0.13"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions>
+                        <StopStoryboard BeginStoryboardName="WaveAnim"/>
+                    </DataTrigger.ExitActions>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+    </Window.Resources>
+
+    <Grid>
+        <!-- Hintergrund mit farbigem Schimmer -->
+        <Rectangle IsHitTestVisible="False">
+            <Rectangle.Fill>
+                <RadialGradientBrush Center="0.1,-0.1" GradientOrigin="0.1,-0.1" RadiusX="0.75" RadiusY="0.9">
+                    <GradientStop Color="#29FF5F6D" Offset="0"/>
+                    <GradientStop Color="#00FF5F6D" Offset="1"/>
+                </RadialGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+        <Rectangle IsHitTestVisible="False">
+            <Rectangle.Fill>
+                <RadialGradientBrush Center="1,0" GradientOrigin="1,0" RadiusX="0.7" RadiusY="0.9">
+                    <GradientStop Color="#297F7FD5" Offset="0"/>
+                    <GradientStop Color="#007F7FD5" Offset="1"/>
+                </RadialGradientBrush>
+            </Rectangle.Fill>
+        </Rectangle>
+
+        <DockPanel>
+            <!-- Kopfzeile -->
+            <Border DockPanel.Dock="Top" BorderBrush="{StaticResource Line}" BorderThickness="0,0,0,1" Background="#B80C0E16" Padding="20,12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,14,0">
+                        <Border Width="38" Height="38" CornerRadius="11" Background="{StaticResource Accent}">
+                            <Border.Effect><DropShadowEffect Color="#FF5F6D" BlurRadius="18" ShadowDepth="4" Direction="270" Opacity="0.35"/></Border.Effect>
+                            <TextBlock Text="🔊" FontFamily="Segoe UI Emoji" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="Meme Soundboard" FontSize="17" FontWeight="Bold"/>
+                            <TextBlock x:Name="CountText" Text="0 Sounds" FontSize="11.5" FontWeight="SemiBold" Foreground="{StaticResource Muted}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <TextBox x:Name="Search" Grid.Column="1" Style="{StaticResource SearchBox}" TextChanged="Search_TextChanged"/>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
+                        <Button x:Name="ImportBtn" Style="{StaticResource AccentButton}" Click="Import_Click" ToolTip="Sound-Dateien oder einen Ordner importieren (Strg+O)">
+                            <StackPanel Orientation="Horizontal">
+                                <Path Data="M6,0 V12 M0,6 H12" Stroke="#1A0F12" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Importieren"/>
+                            </StackPanel>
+                            <Button.ContextMenu>
+                                <ContextMenu>
+                                    <MenuItem Header="Dateien auswählen …" Click="ImportFiles_Click"/>
+                                    <MenuItem Header="Ganzen Ordner importieren …" Click="ImportFolder_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
+                        <Button Style="{StaticResource StopButton}" Margin="10,0,0,0" Click="Stop_Click" ToolTip="Alles stoppen (Esc)">
+                            <StackPanel Orientation="Horizontal">
+                                <Rectangle Width="11" Height="11" RadiusX="2.5" RadiusY="2.5" Fill="#FF8A9E" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <TextBlock Text="Stop"/>
+                            </StackPanel>
+                        </Button>
+                        <CheckBox x:Name="Overlap" Style="{StaticResource Switch}" Content="Überlappen" Margin="14,0,10,0" VerticalAlignment="Center"
+                                  ToolTip="Mehrere Sounds gleichzeitig abspielen" Checked="Overlap_Changed" Unchecked="Overlap_Changed"/>
+                        <Border Height="40" Padding="12,0" CornerRadius="12" Background="{StaticResource Panel}" BorderBrush="{StaticResource Line}" BorderThickness="1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="🔉" FontFamily="Segoe UI Emoji" FontSize="13" VerticalAlignment="Center" Foreground="{StaticResource Muted}"/>
+                                <Slider x:Name="Volume" Style="{StaticResource VolumeSlider}" Width="130" Margin="10,0" Minimum="0" Maximum="5"
+                                        SmallChange="0.05" LargeChange="0.25" VerticalAlignment="Center" ValueChanged="Volume_Changed"/>
+                                <TextBlock x:Name="VolumeText" Text="80 %" Width="50" TextAlignment="Right" FontWeight="Bold" VerticalAlignment="Center"
+                                           Cursor="Hand" ToolTip="Klicken = zurück auf 100 %" MouseLeftButtonDown="VolumeText_Click"/>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <Grid>
+                <!-- Kacheln -->
+                <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" Focusable="False">
+                    <StackPanel Margin="14,14,14,0">
+                        <ItemsControl x:Name="Pads" ItemTemplate="{StaticResource PadTemplate}" Focusable="False">
+                            <ItemsControl.ItemsPanel>
+                                <ItemsPanelTemplate>
+                                    <UniformGrid VerticalAlignment="Top"
+                                                 Columns="{Binding PadColumns, RelativeSource={RelativeSource AncestorType=local:MainWindow}}"/>
+                                </ItemsPanelTemplate>
+                            </ItemsControl.ItemsPanel>
+                        </ItemsControl>
+
+                        <!-- Tastenkürzel -->
+                        <DockPanel Margin="6,14,6,20">
+                            <Button DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Sound-Ordner öffnen" FontSize="11.5" Click="OpenFolder_Click"/>
+                            <WrapPanel TextElement.FontSize="11.5" TextElement.Foreground="{StaticResource Muted}">
+                                <WrapPanel.Resources>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="VerticalAlignment" Value="Center"/>
+                                    </Style>
+                                </WrapPanel.Resources>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="1" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <TextBlock Text="–" Margin="0,0,4,0"/>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="0" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="Q" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <TextBlock Text="–" Margin="0,0,4,0"/>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="P" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <TextBlock Text="spielen die ersten 20" Margin="0,0,16,0"/>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="Esc" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <TextBlock Text="stoppt alles" Margin="0,0,16,0"/>
+                                <Border Style="{StaticResource Kbd}"><TextBlock Text="Strg+F" FontFamily="{StaticResource Mono}" FontSize="10.5"/></Border>
+                                <TextBlock Text="sucht, Enter spielt den ersten Treffer" Margin="0,0,16,0"/>
+                                <TextBlock Text="Dateien oder Ordner einfach reinziehen"/>
+                            </WrapPanel>
+                        </DockPanel>
+                    </StackPanel>
+                </ScrollViewer>
+
+                <!-- Leerer Zustand -->
+                <Grid x:Name="EmptyState" Margin="20" Visibility="Collapsed">
+                    <Rectangle RadiusX="22" RadiusY="22" Stroke="{StaticResource Line}" StrokeThickness="2" StrokeDashArray="4 3" Fill="{StaticResource Panel}"/>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="🎧" FontFamily="Segoe UI Emoji" FontSize="48" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Noch keine Sounds" FontSize="18" FontWeight="Bold" HorizontalAlignment="Center" Margin="0,10,0,6"/>
+                        <TextBlock Text="Zieh Sound-Dateien oder einen ganzen Ordner hier rein." Foreground="{StaticResource Muted}" HorizontalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+                            <Button Style="{StaticResource AccentButton}" Click="ImportFiles_Click" Content="+  Dateien importieren"/>
+                            <Button Style="{StaticResource FlatButton}" Margin="10,0,0,0" Click="ImportFolder_Click" Content="Ordner importieren"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Drop-Hinweis -->
+                <Grid x:Name="DropOverlay" Margin="12" Visibility="Collapsed" IsHitTestVisible="False">
+                    <Rectangle RadiusX="24" RadiusY="24" Stroke="{StaticResource AccentB}" StrokeThickness="3" StrokeDashArray="3 2" Fill="#E60C0E16"/>
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="🎵" FontFamily="Segoe UI Emoji" FontSize="54" HorizontalAlignment="Center"/>
+                        <TextBlock Text="Sounds hier loslassen" FontSize="24" FontWeight="Black" Foreground="{StaticResource AccentB}" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
+
+                <!-- Toast -->
+                <Border x:Name="Toast" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="16,0,16,22" Padding="18,11"
+                        CornerRadius="12" Background="#171A25" BorderBrush="{StaticResource Line}" BorderThickness="1"
+                        Opacity="0" IsHitTestVisible="False">
+                    <Border.Effect><DropShadowEffect BlurRadius="24" ShadowDepth="8" Direction="270" Opacity="0.45"/></Border.Effect>
+                    <TextBlock x:Name="ToastText" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                </Border>
+            </Grid>
+        </DockPanel>
+    </Grid>
+</Window>

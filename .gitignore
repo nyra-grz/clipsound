@@ -1,0 +1,12 @@
+# Sounds (fremdes Material) und Logs
+sounds/
+server.log
+.DS_Store
+
+# Builds
+Meme Soundboard.app/
+macos/.build/
+macos/dist/
+windows/dist/
+windows/**/bin/
+windows/**/obj/
