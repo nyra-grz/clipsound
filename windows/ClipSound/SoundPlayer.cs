@@ -44,6 +44,19 @@ public sealed class SoundPlayer : IDisposable
             totalSamples = vorbis.Length / (vorbis.WaveFormat.BitsPerSample / 8);
             return vorbis;
         }
+        if (path.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
+        {
+            // MP3 zuerst mit NLayer (reiner C#-Decoder) – braucht keine Windows-Codecs,
+            // die z. B. bei „N“-Editionen fehlen
+            try
+            {
+                var mp3 = new Mp3FileReaderBase(path, wf => new NLayer.NAudioSupport.Mp3FrameDecompressor(wf));
+                reader = mp3;
+                totalSamples = mp3.Length / Math.Max(1, mp3.WaveFormat.BitsPerSample / 8);
+                return mp3.ToSampleProvider();
+            }
+            catch { /* weiter mit den Windows-Decodern */ }
+        }
         try
         {
             var file = new AudioFileReader(path);

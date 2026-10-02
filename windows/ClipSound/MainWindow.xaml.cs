@@ -506,7 +506,7 @@ public partial class MainWindow : Window
                 string standard;
                 try { using var r = new NAudio.Wave.AudioFileReader(f); standard = r.Read(new float[4096], 0, 4096) > 0 ? "ok" : "leer"; }
                 catch (Exception ex) { standard = "FEHLER " + ex.GetType().Name + ": " + ex.Message; }
-                sb.AppendLine($"  {Path.GetFileName(f)}: Standard-Decoder {standard} | ClipSound: {SoundPlayer.CheckDecodable(f) ?? "dekodiert ok"}");
+                sb.AppendLine($"  {Path.GetFileName(f)}: Windows-Decoder {standard} | ClipSound: {SoundPlayer.CheckDecodable(f) ?? "dekodiert ok"}");
             }
             Render();
         }
