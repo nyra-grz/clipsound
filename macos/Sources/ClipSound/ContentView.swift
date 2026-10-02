@@ -154,14 +154,17 @@ struct ContentView: View {
     @ObservedObject var library: SoundLibrary
     @ObservedObject var player: SoundPlayer
     @ObservedObject var keys: KeyBindStore
+    @ObservedObject var updater: Updater
     @State private var dropTargeted = false
+    @State private var updateDismissed = false
     @State private var pendingDelete: Sound?
 
-    init(board: Board) {
+    init(board: Board, updater: Updater) {
         self.board = board
         self.library = board.library
         self.player = board.player
         self.keys = board.keys
+        self.updater = updater
     }
 
     var body: some View {
@@ -183,6 +186,7 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .safeAreaInset(edge: .top, spacing: 0) { updateBar }
         .background(.background)
         .overlay { if dropTargeted { dropHighlight } }
         .overlay { if let sound = board.recording { recorder(for: sound) } }
@@ -199,6 +203,16 @@ struct ContentView: View {
             Button("In den Papierkorb legen", role: .destructive) { board.delete(sound) }
         } message: { _ in
             Text("Die Datei wird in den Papierkorb verschoben.")
+        }
+        .alert("Updates", isPresented: updateMessageShown) {
+            Button("OK") { updater.state = .idle }
+            if case .failed = updater.state { Button("Download-Seite öffnen") { updater.openReleasePage(); updater.state = .idle } }
+        } message: {
+            switch updater.state {
+            case .upToDate: Text("Du hast die neueste Version (\(updater.currentVersion)).")
+            case .failed(let text): Text(text)
+            default: Text("")
+            }
         }
         .alert("ClipSound", isPresented: problemShown, presenting: board.problem) { _ in
             Button("OK") {}
@@ -304,6 +318,45 @@ struct ContentView: View {
             .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
             .padding(8)
             .allowsHitTesting(false)
+    }
+
+    // MARK: Update
+
+    @ViewBuilder private var updateBar: some View {
+        if let release = updater.available, !updateDismissed || updater.state == .downloading {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                        .font(.title3)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("ClipSound \(release.version) ist verfügbar").font(.headline)
+                        Text("Du hast \(updater.currentVersion).").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if updater.state == .downloading {
+                        ProgressView().controlSize(.small)
+                        Text("Wird installiert …").foregroundStyle(.secondary)
+                    } else {
+                        Button("Was ist neu?") { updater.openReleasePage() }
+                            .buttonStyle(.link)
+                        Button("Später") { updateDismissed = true }
+                        Button("Jetzt aktualisieren") { Task { await updater.install() } }
+                            .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                Divider()
+            }
+            .background(.bar)
+        }
+    }
+
+    private var updateMessageShown: Binding<Bool> {
+        Binding(get: {
+            switch updater.state { case .upToDate, .failed: true; default: false }
+        }, set: { if !$0 { updater.state = .idle } })
     }
 
     private var deleteDialogShown: Binding<Bool> {

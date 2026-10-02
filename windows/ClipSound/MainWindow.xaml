@@ -107,6 +107,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
@@ -167,7 +168,32 @@
             </Grid>
         </Grid>
 
-        <Grid Grid.Row="1">
+        <!-- Update verfügbar -->
+        <Border x:Name="UpdateBar" Grid.Row="1" Margin="16,0,16,8" Padding="14,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="&#xE896;" FontFamily="{StaticResource IconFont}" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"
+                           Foreground="{DynamicResource AccentFillColorDefaultBrush}"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock x:Name="UpdateTitle" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="UpdateSubtitle" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                    <ProgressBar x:Name="UpdateProgressBar" Height="4" Margin="0,6,0,0" Maximum="1" Visibility="Collapsed"/>
+                </StackPanel>
+                <StackPanel x:Name="UpdateButtons" Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Was ist neu?" Click="UpdateNotes_Click" Margin="0,0,8,0"/>
+                    <Button Content="Später" Click="UpdateLater_Click" Margin="0,0,8,0"/>
+                    <Button Content="Jetzt aktualisieren" Style="{DynamicResource AccentButtonStyle}" Click="UpdateNow_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2">
             <!-- Kacheln -->
             <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
                 <ItemsControl x:Name="Tiles" ItemTemplate="{StaticResource TileTemplate}" Margin="16,4,16,16" Focusable="False">
@@ -207,7 +233,7 @@
         </Grid>
 
         <!-- Taste aufnehmen -->
-        <Grid x:Name="Recorder" Grid.RowSpan="2" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
+        <Grid x:Name="Recorder" Grid.RowSpan="3" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
               MouseLeftButtonDown="RecorderBackground_MouseDown">
             <Border Width="380" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24" CornerRadius="8" BorderThickness="1"
                     Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"

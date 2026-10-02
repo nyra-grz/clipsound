@@ -16,6 +16,7 @@ if [ ! -f .build/icon/AppIcon.icns ]; then
   iconutil -c icns .build/icon/AppIcon.iconset -o .build/icon/AppIcon.icns
 fi
 APP="dist/ClipSound.app"
+VERSION="$(cat ../VERSION)"
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/ClipSound "$APP/Contents/MacOS/ClipSound"
 cp .build/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
@@ -29,8 +30,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>ClipSound</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>1.1</string>
-  <key>CFBundleVersion</key><string>2</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.entertainment</string>
   <key>NSHighResolutionCapable</key><true/>

@@ -10,7 +10,8 @@
     <AssemblyName>ClipSound</AssemblyName>
     <RootNamespace>ClipSound</RootNamespace>
     <ApplicationIcon>AppIcon.ico</ApplicationIcon>
-    <Version>1.1.0</Version>
+    <!-- Version kommt aus der Datei VERSION im Hauptordner -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../VERSION').Trim())</Version>
     <Product>ClipSound</Product>
     <!-- ThemeMode (Fluent-Design) ist noch als „experimentell“ markiert -->
     <NoWarn>$(NoWarn);WPF0001</NoWarn>

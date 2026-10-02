@@ -7,6 +7,8 @@ import AppKit
 //   --import <pfad>      Datei/Ordner importieren, Ergebnis ausgeben und beenden
 //   --keytest            Tastenkürzel prüfen (⌃⌥K auf den ersten Sound), Ergebnis ausgeben und beenden
 //   --recorder           Aufnahme-Fenster für den ersten Sound öffnen (für Screenshots)
+//   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
+//   --update-now         verfügbares Update ohne Nachfrage installieren
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
 enum LaunchArgs {
     static let args = ProcessInfo.processInfo.arguments
@@ -94,6 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             board.player.stopAll()
             print("SELFTEST: nach Stop = \(board.player.progress)")
             board.player.volume = oldVolume
+            UserDefaults.standard.synchronize() // sonst bleibt 500 % gespeichert
             fflush(stdout)
             exit(0)
         }
@@ -104,6 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 struct ClipSoundApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var board: Board
+    @StateObject private var updater = Updater()
 
     init() {
         let board = Board(library: SoundLibrary(folder: LaunchArgs.library))
@@ -112,12 +116,22 @@ struct ClipSoundApp: App {
 
     var body: some Scene {
         Window("ClipSound", id: "main") {
-            ContentView(board: board)
+            ContentView(board: board, updater: updater)
                 .frame(minWidth: 620, minHeight: 380)
                 .onAppear { delegate.board = board }
+                .task {
+                    // Beim Start nach Updates schauen (nicht bei Testläufen)
+                    let testRun = ["--snapshot", "--selftest", "--keytest", "--import"].contains(where: LaunchArgs.args.contains)
+                    guard !testRun || LaunchArgs.args.contains("--pretend-version") else { return }
+                    await updater.check()
+                    if LaunchArgs.args.contains("--update-now"), updater.available != nil { await updater.install() }
+                }
         }
         .defaultSize(width: 980, height: 640)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Nach Updates suchen …") { Task { await updater.check(userInitiated: true) } }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Sounds importieren …") { board.openImportPanel() }
                     .keyboardShortcut("o")

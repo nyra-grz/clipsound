@@ -61,8 +61,33 @@ jobs:
           Run @('--library', "$pwd\testlib\Sounds", '--size', '700x600', '--snapshot', "$pwd\shots\2-schmal.png", '--selftest', "$pwd\shots\selftest-schmal.txt")
           Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--pretend-version', '1.0', '--snapshot', "$pwd\shots\5-update.png")
           Get-ChildItem shots
           Get-ChildItem shots -Filter *.txt | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }
+
+      - name: Update testen (tut so, als wäre 1.0 installiert)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force upd | Out-Null
+          Copy-Item out\ClipSound.exe upd\ClipSound.exe
+          $before = (Get-FileHash upd\ClipSound.exe).Hash
+          Start-Process "$pwd\upd\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds", '--pretend-version', '1.0', '--update-now'
+          $ok = $false
+          for ($i = 0; $i -lt 60; $i++) {
+            Start-Sleep 2
+            if ((Get-FileHash upd\ClipSound.exe -ErrorAction SilentlyContinue).Hash -ne $before) { $ok = $true; break }
+          }
+          Start-Sleep 8   # neue Version startet und räumt die alte weg
+          $running = Get-Process ClipSound -ErrorAction SilentlyContinue
+          $report = @(
+            "exe ausgetauscht: $ok (nach $($i * 2) s)",
+            "neue Version läuft: $([bool]$running)",
+            "alte exe weggeräumt: $(-not (Test-Path upd\ClipSound.exe.old))",
+            "Version der neuen exe: $((Get-Item upd\ClipSound.exe).VersionInfo.ProductVersion)"
+          )
+          $report | Tee-Object shots\update-test.txt
+          $running | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $ok) { exit 1 }
 
       - uses: actions/upload-artifact@v4
         if: always()

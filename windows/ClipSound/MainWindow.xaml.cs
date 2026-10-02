@@ -19,6 +19,8 @@ namespace ClipSound;
 //   --size <B>x<H>       Fenstergröße (z. B. 700x600)
 //   --recorder           Aufnahmefenster für den ersten Sound öffnen
 //   --snapshot <png>     Fenster als Bild speichern und beenden
+//   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
+//   --update-now         verfügbares Update ohne Nachfrage installieren
 //   --selftest <txt>     Tastenkürzel und Wiedergabe prüfen, Bericht schreiben und beenden
 public partial class MainWindow : Window
 {
@@ -70,6 +72,8 @@ public partial class MainWindow : Window
             Keyboard.Focus(this); // Tasten sofort nutzbar
             if (_playerError is not null) ShowError("Kein Audiogerät gefunden: " + _playerError);
             RunTestArguments();
+            Updater.CleanupOldVersion();
+            if (!TestMode || HasArg("--pretend-version")) _ = CheckForUpdateAsync();
         };
         Closing += (_, _) => { _settings.Save(); _hotKeys?.Dispose(); _player?.Dispose(); };
 
@@ -397,6 +401,45 @@ public partial class MainWindow : Window
         if (TestMode) { _testErrors.Add(text); return; }
         MessageBox.Show(this, text, "ClipSound", MessageBoxButton.OK, MessageBoxImage.Warning);
     }
+
+    // ---------- Updates ----------
+
+    private Updater.Release? _update;
+
+    private async Task CheckForUpdateAsync()
+    {
+        try { _update = await Updater.CheckAsync(); }
+        catch { return; } // offline – egal, beim nächsten Start wieder
+        if (_update is null) return;
+        UpdateTitle.Text = $"ClipSound {_update.Version} ist verfügbar";
+        UpdateSubtitle.Text = $"Du hast {Updater.CurrentVersion}.";
+        UpdateBar.Visibility = Visibility.Visible;
+        if (HasArg("--update-now")) UpdateNow_Click(this, new RoutedEventArgs());
+    }
+
+    private async void UpdateNow_Click(object sender, RoutedEventArgs e)
+    {
+        if (_update is null) return;
+        UpdateButtons.Visibility = Visibility.Collapsed;
+        UpdateProgressBar.Visibility = Visibility.Visible;
+        UpdateSubtitle.Text = "Wird heruntergeladen …";
+        try
+        {
+            await Updater.InstallAsync(_update, new Progress<double>(p => UpdateProgressBar.Value = p));
+        }
+        catch (Exception ex)
+        {
+            UpdateButtons.Visibility = Visibility.Visible;
+            UpdateProgressBar.Visibility = Visibility.Collapsed;
+            UpdateSubtitle.Text = $"Du hast {Updater.CurrentVersion}.";
+            ShowError("Update fehlgeschlagen: " + ex.Message);
+        }
+    }
+
+    private void UpdateLater_Click(object sender, RoutedEventArgs e) => UpdateBar.Visibility = Visibility.Collapsed;
+
+    private void UpdateNotes_Click(object sender, RoutedEventArgs e) =>
+        Process.Start(new ProcessStartInfo(_update?.Page ?? $"https://github.com/{Updater.Repo}/releases/latest") { UseShellExecute = true });
 
     // ---------- Tests ----------
 
