@@ -70,10 +70,12 @@ public partial class MainWindow : Window
         Loaded += (_, _) =>
         {
             Keyboard.Focus(this); // Tasten sofort nutzbar
-            if (_playerError is not null) ShowError("Kein Audiogerät gefunden: " + _playerError);
             RunTestArguments();
             Updater.CleanupOldVersion();
             if (!TestMode || HasArg("--pretend-version")) _ = CheckForUpdateAsync();
+            // Meldung erst danach – ein Meldungsfenster darf den Start (und den Updater) nicht aufhalten
+            if (_playerError is not null)
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => ShowError("Kein Audiogerät gefunden: " + _playerError));
         };
         Closing += (_, _) => { _settings.Save(); _hotKeys?.Dispose(); _player?.Dispose(); };
 

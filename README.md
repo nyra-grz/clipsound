@@ -28,6 +28,15 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 - Die Apps starten leer. Sounds lassen sich einzeln oder als ganzer Ordner importieren, auch per Drag & Drop.
 - Auf dem iPhone liegen die Sounds in der Dateien-App unter *Auf meinem iPhone › ClipSound*.
 
+## Updates
+
+Mac- und Windows-App suchen beim Start auf GitHub nach einer neueren Version. Wenn es eine gibt, erscheint oben eine Leiste mit **Jetzt aktualisieren**: Die App lädt das Update, ersetzt sich selbst und startet neu. Am Mac geht das auch über *ClipSound › Nach Updates suchen …*.
+
+Ein neues Release veröffentlichen:
+
+1. Die Versionsnummer in `VERSION` erhöhen.
+2. `./release.sh notizen.md` ausführen.
+
 ## Voraussetzungen
 
 - Mac: macOS 15+, Xcode
