@@ -66,9 +66,10 @@ public sealed class SoundLibrary
         var rejected = new List<string>();
         foreach (var file in Expand(paths))
         {
-            if (!AudioExtensions.Contains(Path.GetExtension(file)) || !IsAudio(file))
+            var problem = AudioExtensions.Contains(Path.GetExtension(file)) ? SoundPlayer.CheckDecodable(file) : "kein Audioformat";
+            if (problem is not null)
             {
-                rejected.Add(Path.GetFileName(file));
+                rejected.Add($"{Path.GetFileName(file)} ({problem})");
                 continue;
             }
             try
@@ -101,20 +102,6 @@ public sealed class SoundLibrary
             File.Delete(sound.Path);
         }
         Reload();
-    }
-
-    private static bool IsAudio(string file)
-    {
-        try
-        {
-            SoundPlayer.Open(file, out var reader, out var total);
-            reader.Dispose();
-            return total > 0;
-        }
-        catch
-        {
-            return false;
-        }
     }
 
     private static IEnumerable<string> Expand(IEnumerable<string> paths)

@@ -1,3 +1,4 @@
+using System.IO;
 using NAudio.Vorbis;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
@@ -43,10 +44,48 @@ public sealed class SoundPlayer : IDisposable
             totalSamples = vorbis.Length / (vorbis.WaveFormat.BitsPerSample / 8);
             return vorbis;
         }
-        var file = new AudioFileReader(path);
-        reader = file;
-        totalSamples = file.Length / (file.WaveFormat.BitsPerSample / 8);
-        return file;
+        try
+        {
+            var file = new AudioFileReader(path);
+            reader = file;
+            totalSamples = file.Length / (file.WaveFormat.BitsPerSample / 8);
+            return file;
+        }
+        catch (Exception first)
+        {
+            // Plan B: Windows' eigene Decoder (Media Foundation) – klappt bei MP3s, die der
+            // Standard-Decoder nicht mag, und bei M4A/AAC/WMA/FLAC
+            try
+            {
+                var mf = new MediaFoundationReader(path);
+                reader = mf;
+                totalSamples = mf.Length / Math.Max(1, mf.WaveFormat.BitsPerSample / 8);
+                return mf.ToSampleProvider();
+            }
+            catch (Exception second)
+            {
+                throw new InvalidDataException($"{first.Message} / Media Foundation: {second.Message}", first);
+            }
+        }
+    }
+
+    /// <summary>Prüft, ob sich die Datei wirklich dekodieren lässt. Gibt null oder den Grund zurück.</summary>
+    public static string? CheckDecodable(string path)
+    {
+        try
+        {
+            var source = Open(path, out var reader, out var total);
+            using (reader)
+            {
+                if (total <= 0) return "leer";
+                var buffer = new float[4096];
+                return source.Read(buffer, 0, buffer.Length) > 0 ? null : "keine Audiodaten";
+            }
+        }
+        catch (Exception ex)
+        {
+            return ex.Message;
+        }
     }
 
     public void Play(Sound sound)

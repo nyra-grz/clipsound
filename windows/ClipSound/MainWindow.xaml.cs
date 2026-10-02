@@ -495,6 +495,22 @@ public partial class MainWindow : Window
         if (_testErrors.Count > 0) sb.AppendLine("Meldungen: " + string.Join(" | ", _testErrors));
         sb.AppendLine("Tasten: " + string.Join(", ", _library.Sounds.Take(6).Select(s => $"{s.Title}={_keys.Binds.GetValueOrDefault(s.FileName)?.Display ?? "–"}")));
 
+        // Import testen: --import-test <ordner> importiert echte Dateien (z. B. MP3s) und schreibt das Ergebnis
+        if (Arg("--import-test") is { } importDir)
+        {
+            var (added, rejected) = _library.Import(new[] { importDir });
+            sb.AppendLine($"Import: {added} übernommen, {rejected.Count} abgelehnt");
+            foreach (var r in rejected) sb.AppendLine("  abgelehnt: " + r);
+            foreach (var f in Directory.GetFiles(importDir))
+            {
+                string standard;
+                try { using var r = new NAudio.Wave.AudioFileReader(f); standard = r.Read(new float[4096], 0, 4096) > 0 ? "ok" : "leer"; }
+                catch (Exception ex) { standard = "FEHLER " + ex.GetType().Name + ": " + ex.Message; }
+                sb.AppendLine($"  {Path.GetFileName(f)}: Standard-Decoder {standard} | ClipSound: {SoundPlayer.CheckDecodable(f) ?? "dekodiert ok"}");
+            }
+            Render();
+        }
+
         if (_library.Sounds.Count > 0)
         {
             var first = _library.Sounds[0].FileName;

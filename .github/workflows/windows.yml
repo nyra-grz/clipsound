@@ -57,7 +57,7 @@ jobs:
             $crash = Join-Path $env:TEMP 'clipsound-crash.txt'
             if (Test-Path $crash) { Write-Host "ABSTURZ:"; Get-Content $crash; Move-Item $crash "$pwd\shots\absturz-$(Get-Random).txt" }
           }
-          Run @('--library', "$pwd\testlib\Sounds", '--snapshot', "$pwd\shots\1-normal.png", '--selftest', "$pwd\shots\selftest.txt")
+          Run @('--library', "$pwd\testlib\Sounds", '--snapshot', "$pwd\shots\1-normal.png", '--selftest', "$pwd\shots\selftest.txt", '--import-test', "$pwd\windows\testdata")
           Run @('--library', "$pwd\testlib\Sounds", '--size', '700x600', '--snapshot', "$pwd\shots\2-schmal.png", '--selftest', "$pwd\shots\selftest-schmal.txt")
           Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
