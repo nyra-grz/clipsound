@@ -614,12 +614,11 @@ public partial class MainWindow : Window
 
     // ---------- Lautstärke der Geräte (versteckt) ----------
 
-    private void LobbyCode_MouseDown(object sender, MouseButtonEventArgs e)
+    private void SpeakerIcon_MouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ClickCount != 3) return;
+        if (e.ClickCount != 3 || !_lobby.Active) return;
         _volumeRowIds = "";
         UpdateVolumeRows();
-        VolumePopup.PlacementTarget = (UIElement)sender;
         VolumePopup.IsOpen = true;
         e.Handled = true;
     }

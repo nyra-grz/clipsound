@@ -5,7 +5,6 @@ import AppKit
 struct LobbyBar: View {
     @ObservedObject var lobby: Lobby
     @Binding var showLobby: Bool
-    @State private var showVolumes = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,9 +16,7 @@ struct LobbyBar: View {
                         Text(lobby.isHost ? "Deine Lobby" : "Lobby von \(lobby.hostName)").font(.headline)
                         Text(lobby.code)
                             .font(.system(.headline, design: .monospaced))
-                            .onTapGesture(count: 3) { showVolumes = true } // versteckt
-                            .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
-                            .onAppear { if LaunchArgs.args.contains("--lobby-volumes") { showVolumes = true } }
+                            .textSelection(.enabled)
                     }
                     Text(status).font(.caption).foregroundStyle(.secondary)
                 }
@@ -83,7 +80,6 @@ struct LobbySheet: View {
     @ObservedObject var library: SoundLibrary
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
-    @State private var showVolumes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -175,8 +171,7 @@ struct LobbySheet: View {
                 Text(lobby.code)
                     .font(.system(size: 40, weight: .semibold, design: .monospaced))
                     .kerning(6)
-                    .onTapGesture(count: 3) { showVolumes = true } // versteckt
-                    .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
+                    .textSelection(.enabled)
                 if lobby.phase != .open {
                     ProgressView().controlSize(.small)
                 }
@@ -208,7 +203,7 @@ struct LobbySheet: View {
     }
 }
 
-/// Versteckt: dreimal auf den Lobby-Code klicken. Jeder stellt hier die echten Lautsprecher
+/// Versteckt: in einer Lobby dreimal auf das Lautsprecher-Symbol klicken. Jeder stellt hier die echten Lautsprecher
 /// jedes Geräts ein.
 struct VolumeMixer: View {
     @ObservedObject var lobby: Lobby

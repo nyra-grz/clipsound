@@ -194,6 +194,7 @@ function serveFile(req, res, file, type, extra = {}) {
     if (range) {
       const start = range[1] ? +range[1] : 0;
       const end = range[2] ? Math.min(+range[2], st.size - 1) : st.size - 1;
+      if (!range[1] && !range[2] || start > end || start >= st.size) return res.writeHead(416, { ...head, 'Content-Range': `bytes */${st.size}` }), res.end(); // sonst RangeError → Absturz
       res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
       fs.createReadStream(file, { start, end }).pipe(res);
     } else {

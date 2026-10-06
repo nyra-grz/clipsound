@@ -199,7 +199,7 @@ public sealed class Lobby
 
     public void Answer(LobbyRequest request, bool ok) => Send(new { type = "answer", req = request.Req, ok });
 
-    // ---------- Lautstärke (versteckt: dreimal auf den Code klicken) ----------
+    // ---------- Lautstärke (versteckt: dreimal auf das Lautsprecher-Symbol klicken) ----------
 
     /// <summary>Host stellt die Lautsprecher eines anderen Geräts ein</summary>
     public void SetVolume(LobbyMember member, double level)

@@ -336,7 +336,7 @@ struct ContentView: View {
             .help("Mehrere Sounds gleichzeitig abspielen")
         }
         ToolbarItem(placement: .primaryAction) {
-            VolumeControl(volume: $player.volume)
+            VolumeControl(volume: $player.volume, lobby: board.lobby)
         }
         ToolbarItem(placement: .navigation) {
             Button { showLobby = true } label: {
@@ -520,12 +520,21 @@ struct ContentView: View {
 
 struct VolumeControl: View {
     @Binding var volume: Double
+    @ObservedObject var lobby: Lobby
+    @State private var showVolumes = false
 
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: "speaker.wave.2.fill", variableValue: min(volume, 1))
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 3) { if lobby.active { showVolumes = true } } // versteckt: Regler aller Geräte
+                .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
+                .onChange(of: lobby.active) { _, active in
+                    if active && LaunchArgs.args.contains("--lobby-volumes") { showVolumes = true }
+                    if !active { showVolumes = false }
+                }
             Slider(value: $volume, in: 0...SoundPlayer.maxVolume)
                 .controlSize(.small)
                 .frame(width: 110)

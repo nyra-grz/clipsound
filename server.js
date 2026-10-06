@@ -73,6 +73,7 @@ function serveFile(req, res, file, type) {
     if (range) {
       const start = range[1] ? +range[1] : 0;
       const end = range[2] ? Math.min(+range[2], st.size - 1) : st.size - 1;
+      if (!range[1] && !range[2] || start > end || start >= st.size) return res.writeHead(416, { 'Content-Range': `bytes */${st.size}` }), res.end(); // sonst RangeError → Absturz
       res.writeHead(206, {
         'Content-Type': type, 'Accept-Ranges': 'bytes',
         'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1,

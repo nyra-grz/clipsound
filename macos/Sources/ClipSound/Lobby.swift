@@ -217,7 +217,7 @@ final class Lobby: ObservableObject {
         note = "„\(sound.title)“ an \(member.name) angeboten …"
     }
 
-    // MARK: Lautstärke (versteckt: dreimal auf den Code klicken)
+    // MARK: Lautstärke (versteckt: dreimal auf das Lautsprecher-Symbol klicken)
 
     /// Stellt die Lautsprecher eines anderen Geräts ein (darf jeder)
     func setVolume(of member: LobbyMember, to level: Double) {
