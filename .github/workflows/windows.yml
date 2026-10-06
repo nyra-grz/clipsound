@@ -4,6 +4,10 @@ on:
   push:
     paths: ['windows/**', '.github/workflows/windows.yml']
   workflow_dispatch:
+    inputs:
+      mac_lobby:
+        description: 'Code einer offenen Lobby (z. B. vom Mac) – Windows tritt bei und drückt den ersten Sound'
+        required: false
 
 jobs:
   build-and-check:
@@ -88,6 +92,85 @@ jobs:
           $report | Tee-Object shots\update-test.txt
           $running | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $ok) { exit 1 }
+
+      - name: Globaler Kürzel Alt+2 (App im Hintergrund)
+        shell: pwsh
+        run: |
+          Add-Type @'
+          using System; using System.Runtime.InteropServices;
+          public class K { [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); }
+          '@
+          $p = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds", '--hotkey-test', "$pwd\shots\hotkey.txt" -PassThru
+          Start-Sleep 5
+          # anderes Fenster nach vorne, damit ClipSound wirklich im Hintergrund ist
+          Start-Process notepad; Start-Sleep 2
+          [K]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero); [K]::keybd_event(0x32, 0, 0, [UIntPtr]::Zero)
+          [K]::keybd_event(0x32, 0, 2, [UIntPtr]::Zero); [K]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+          $p.WaitForExit(30000) | Out-Null
+          Get-Process notepad -ErrorAction SilentlyContinue | Stop-Process -Force
+          Get-Content shots\hotkey.txt
+          if (-not (Select-String -Path shots\hotkey.txt -Pattern 'ausgelöst für' -Quiet)) { Write-Host 'Alt+2 hat nicht ausgelöst'; exit 1 }
+
+      - name: Sounds wandern auf den Desktop (nichts geht verloren)
+        shell: pwsh
+        run: |
+          $old = "$env:APPDATA\ClipSound\Sounds"; $desk = [Environment]::GetFolderPath('DesktopDirectory') + '\Sounds'
+          New-Item -ItemType Directory -Force $old, $desk | Out-Null
+          Copy-Item testlib\Sounds\bruh.wav "$old\A.wav"
+          Copy-Item testlib\Sounds\wow.wav "$old\Gleich.wav"
+          Copy-Item testlib\Sounds\oof.wav "$desk\Gleich.wav"
+          $p = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--snapshot', "$pwd\shots\6-desktop.png" -PassThru
+          $p.WaitForExit(60000) | Out-Null
+          Write-Host "Desktop\Sounds:"; Get-ChildItem $desk | ForEach-Object Name
+          Write-Host "alter Ordner:"; if (Test-Path $old) { Get-ChildItem $old | ForEach-Object Name } else { '(weg, war leer)' }
+          $names = (Get-ChildItem $desk).Name
+          if (-not ($names -contains 'A.wav' -and $names -contains 'Gleich (2).wav' -and $names -contains 'Gleich.wav')) { exit 1 }
+          if ((Get-FileHash "$desk\Gleich.wav").Hash -ne (Get-FileHash testlib\Sounds\oof.wav).Hash) { Write-Host 'Desktop-Datei überschrieben!'; exit 1 }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Lobby (Crossplay mit dem echten Server)
+        shell: pwsh
+        run: |
+          cd cloud; npm ci --silent; cd ..
+          $url = 'https://rooms-production-8e28.up.railway.app'
+          New-Item -ItemType Directory -Force guestlib\Sounds | Out-Null
+
+          # 1) Fremder Host (gleiches Protokoll wie Mac/Browser), Windows tritt bei
+          $hostLog = "$pwd\shots\lobby-node-host.txt"
+          $h = Start-Process node -ArgumentList 'cloud/lobby-tool.mjs', 'host', $url, "$pwd\windows\testdata", '60' -RedirectStandardOutput $hostLog -PassThru -NoNewWindow
+          for ($i = 0; $i -lt 30 -and -not (Select-String -Path $hostLog -Pattern 'CODE' -Quiet -ErrorAction SilentlyContinue); $i++) { Start-Sleep 1 }
+          $code = ((Select-String -Path $hostLog -Pattern 'CODE (\w+)').Matches[0].Groups[1].Value)
+          Write-Host "Lobby vom Testhost: $code"
+          $g = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\guestlib\Sounds", '--lobby-join', $code.ToLower(), '--lobby-play-first', '--lobby-accept', '--lobby-log', "$pwd\shots\lobby-win-gast.txt", '--lobby-exit-after', '25' -PassThru
+          $g.WaitForExit(60000) | Out-Null
+          Write-Host '== Windows als Gast'; Get-Content shots\lobby-win-gast.txt
+          Write-Host '== Testhost'; Get-Content $hostLog | ForEach-Object { $_.Substring(0, [Math]::Min(150, $_.Length)) }
+
+          # 2) Windows ist Host, fremder Gast tritt bei, drückt und fragt
+          $winLog = "$pwd\shots\lobby-win-host.txt"
+          $w = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds", '--lobby-host', '--lobby-accept', '--lobby-log', $winLog, '--lobby-exit-after', '30' -PassThru
+          for ($i = 0; $i -lt 30 -and -not (Select-String -Path $winLog -Pattern 'hochgeladen=(\d+)/\1' -Quiet -ErrorAction SilentlyContinue); $i++) { Start-Sleep 1 }
+          $code2 = ((Select-String -Path $winLog -Pattern 'code=(\w{5})').Matches[0].Groups[1].Value)
+          Write-Host "Windows-Lobby: $code2"
+          node cloud/lobby-tool.mjs guest $url $code2 10 | Tee-Object shots\lobby-node-gast.txt | ForEach-Object { $_.Substring(0, [Math]::Min(150, $_.Length)) }
+          $w.WaitForExit(60000) | Out-Null
+          Write-Host '== Windows als Host'; Get-Content $winLog
+
+          # 3) Optional: echte Lobby vom Mac
+          if ('${{ github.event.inputs.mac_lobby }}' -ne '') {
+            $m = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\guestlib\Sounds", '--lobby-join', '${{ github.event.inputs.mac_lobby }}', '--lobby-play-first', '--lobby-log', "$pwd\shots\lobby-mac.txt", '--lobby-exit-after', '30' -PassThru
+            $m.WaitForExit(60000) | Out-Null
+            Write-Host '== Windows in der Mac-Lobby'; Get-Content shots\lobby-mac.txt
+          }
+
+          $ok = (Select-String -Path shots\lobby-win-gast.txt -Pattern '^.* play ' -Quiet) -and
+                (Select-String -Path shots\lobby-win-gast.txt -Pattern 'bekommen' -Quiet) -and
+                (Select-String -Path $winLog -Pattern ' play ' -Quiet) -and
+                (Select-String -Path shots\lobby-node-gast.txt -Pattern '"ok":true' -Quiet)
+          if (-not $ok) { Write-Host 'Lobby-Test fehlgeschlagen'; exit 1 }
 
       - uses: actions/upload-artifact@v4
         if: always()

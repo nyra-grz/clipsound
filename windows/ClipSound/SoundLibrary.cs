@@ -39,12 +39,55 @@ public sealed class SoundLibrary
         return folder;
     }
 
+    /// <summary>Sounds liegen sichtbar auf dem Desktop im Ordner „Sounds“.</summary>
+    public static string DesktopFolder =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "Sounds");
+
+    /// <summary>Hier liegen keybinds.json und settings.json (nicht im Sound-Ordner).</summary>
+    public string SettingsFolder { get; }
+
     /// <param name="folder">Anderer Sound-Ordner (nur zum Testen)</param>
     public SoundLibrary(string? folder = null)
     {
-        Folder = folder ?? Path.Combine(SupportFolder, "Sounds");
+        Folder = folder ?? DesktopFolder;
+        SettingsFolder = folder is null ? SupportFolder : Path.GetDirectoryName(folder)!;
         Directory.CreateDirectory(Folder);
+        if (folder is null) MoveOldSounds(Folder);
         Reload();
+    }
+
+    /// <summary>
+    /// Bis 1.5 lagen die Sounds in %AppData%\ClipSound\Sounds. Sie werden verschoben, nie gelöscht:
+    /// gleicher Name mit gleichem Inhalt bleibt als Kopie im alten Ordner, anderer Inhalt kommt als „Name (2)“ dazu.
+    /// </summary>
+    private static void MoveOldSounds(string dest)
+    {
+        var old = Path.Combine(SupportFolder, "Sounds");
+        if (!Directory.Exists(old)) return;
+        foreach (var file in Directory.EnumerateFiles(old).Where(f => AudioExtensions.Contains(Path.GetExtension(f))).ToList())
+        {
+            try
+            {
+                var target = Path.Combine(dest, Path.GetFileName(file));
+                if (File.Exists(target))
+                {
+                    if (SameContent(file, target)) continue;
+                    var name = Path.GetFileNameWithoutExtension(file);
+                    var ext = Path.GetExtension(file);
+                    for (int i = 2; File.Exists(target); i++) target = Path.Combine(dest, $"{name} ({i}){ext}");
+                }
+                File.Move(file, target);
+            }
+            catch { /* dann bleibt die Datei eben im alten Ordner */ }
+        }
+        try { if (!Directory.EnumerateFileSystemEntries(old).Any()) Directory.Delete(old); } catch { }
+    }
+
+    private static bool SameContent(string a, string b)
+    {
+        var fa = new FileInfo(a); var fb = new FileInfo(b);
+        if (fa.Length != fb.Length) return false;
+        return File.ReadAllBytes(a).AsSpan().SequenceEqual(File.ReadAllBytes(b));
     }
 
     public void Reload()

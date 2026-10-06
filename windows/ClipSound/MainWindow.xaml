@@ -37,13 +37,8 @@
                         BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
                         ToolTip="{Binding FileName}" MouseLeftButtonDown="Tile_MouseDown">
                     <Border.ContextMenu>
-                        <ContextMenu>
-                            <MenuItem Header="Abspielen" Click="Menu_Play"/>
-                            <MenuItem Header="Taste festlegen …" Click="Menu_Key"/>
-                            <MenuItem Header="Im Explorer zeigen" Click="Menu_Reveal"/>
-                            <Separator/>
-                            <MenuItem Header="Löschen …" Click="Menu_Delete"/>
-                        </ContextMenu>
+                        <!-- Einträge kommen aus dem Code (Lobby: Behalten / Schenken an) -->
+                        <ContextMenu Opened="TileMenu_Opened"/>
                     </Border.ContextMenu>
                     <Grid>
                         <TextBlock x:Name="Icon" Text="&#xE8D6;" FontFamily="{StaticResource IconFont}" FontSize="16"
@@ -95,6 +90,9 @@
                 <DataTrigger Binding="{Binding HotKeyState}" Value="failed">
                     <Setter TargetName="FailedIcon" Property="Visibility" Value="Visible"/>
                 </DataTrigger>
+                <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                    <Setter TargetName="Root" Property="Opacity" Value="0.5"/>
+                </DataTrigger>
                 <DataTrigger Binding="{Binding IsPlaying}" Value="True">
                     <Setter TargetName="Card" Property="BorderBrush" Value="{Binding Tint}"/>
                     <Setter TargetName="Icon" Property="Text" Value="&#xE767;"/>
@@ -106,6 +104,7 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
@@ -137,6 +136,13 @@
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE71A;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Text="Stop"/>
+                    </StackPanel>
+                </Button>
+                <Button x:Name="LobbyBtn" Click="Lobby_Click" Margin="0,0,8,0"
+                        ToolTip="Zusammen abspielen: Lobby öffnen oder mit Code beitreten (auch mit Mac und Browser)">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE716;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Lobby"/>
                     </StackPanel>
                 </Button>
                 <ToggleButton x:Name="Overlap" Margin="0,0,16,0" ToolTip="Mehrere Sounds gleichzeitig abspielen"
@@ -193,7 +199,33 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2">
+        <!-- In einer Lobby -->
+        <Border x:Name="LobbyBar" Grid.Row="2" Margin="16,0,16,8" Padding="14,10" CornerRadius="8" BorderThickness="1" Visibility="Collapsed"
+                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="LobbyBarIcon" Text="&#xE716;" FontFamily="{StaticResource IconFont}" FontSize="18" VerticalAlignment="Center" Margin="0,0,12,0"
+                           Foreground="{DynamicResource AccentFillColorDefaultBrush}"/>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock x:Name="LobbyBarTitle" FontWeight="SemiBold"/>
+                        <TextBlock x:Name="LobbyBarCode" FontWeight="SemiBold" FontFamily="Cascadia Mono, Consolas" Margin="8,0,0,0"/>
+                    </StackPanel>
+                    <TextBlock x:Name="LobbyBarStatus" FontSize="12" Foreground="{DynamicResource TextFillColorSecondaryBrush}" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="Code kopieren" Click="LobbyCopy_Click" Margin="0,0,8,0"/>
+                    <Button Content="Verlassen" Click="LobbyLeave_Click"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3">
             <!-- Kacheln -->
             <ScrollViewer x:Name="Scroller" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Focusable="False">
                 <ItemsControl x:Name="Tiles" ItemTemplate="{StaticResource TileTemplate}" Margin="16,4,16,16" Focusable="False">
@@ -233,7 +265,7 @@
         </Grid>
 
         <!-- Taste aufnehmen -->
-        <Grid x:Name="Recorder" Grid.RowSpan="3" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
+        <Grid x:Name="Recorder" Grid.RowSpan="4" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
               MouseLeftButtonDown="RecorderBackground_MouseDown">
             <Border Width="380" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24" CornerRadius="8" BorderThickness="1"
                     Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
@@ -256,7 +288,7 @@
                         <TextBlock Text="&#xE774;" FontFamily="{StaticResource IconFont}" Margin="0,2,8,0"
                                    Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                         <TextBlock Grid.Column="1" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
-                                   Text="Mit Umschalt + Strg oder Alt geht sie auch, wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord."/>
+                                   Text="Mit Alt (z. B. Alt+2) oder Strg+Umschalt geht sie überall, auch wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord."/>
                     </Grid>
                     <TextBlock x:Name="RecorderNote" Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center" Visibility="Collapsed"
                                Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
@@ -266,6 +298,90 @@
                         <Button Content="Fertig" Style="{DynamicResource AccentButtonStyle}" HorizontalAlignment="Right"
                                 Click="RecorderDone_Click" Focusable="False" ToolTip="Esc"/>
                     </Grid>
+                </StackPanel>
+            </Border>
+        </Grid>
+        <!-- Kurze Meldung unten -->
+        <Border x:Name="Toast" Grid.Row="3" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="16" Padding="16,10"
+                CornerRadius="8" BorderThickness="1" Visibility="Collapsed" IsHitTestVisible="False"
+                Background="{DynamicResource SolidBackgroundFillColorTertiaryBrush}"
+                BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+            <TextBlock x:Name="ToastText" TextWrapping="Wrap" MaxWidth="460"/>
+        </Border>
+
+        <!-- Lobby öffnen / beitreten -->
+        <Grid x:Name="LobbyPanel" Grid.RowSpan="4" Visibility="Collapsed" Background="{DynamicResource SmokeFillColorDefaultBrush}"
+              MouseLeftButtonDown="LobbyBackground_MouseDown">
+            <Border Width="440" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="24" CornerRadius="8" BorderThickness="1"
+                    Background="{DynamicResource SolidBackgroundFillColorBaseBrush}"
+                    BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}"
+                    MouseLeftButtonDown="RecorderCard_MouseDown">
+                <StackPanel>
+                    <TextBlock Text="Zusammen abspielen" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock Margin="0,4,0,16" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                               Text="Jeder Sound, den jemand drückt, läuft bei allen in der Lobby gleichzeitig – egal ob Windows, Mac oder Browser."/>
+
+                    <StackPanel x:Name="LobbyStart">
+                        <TextBlock Text="Dein Name" Margin="0,0,0,4" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBox x:Name="LobbyName" MaxLength="24" Margin="0,0,0,12"/>
+
+                        <Border Padding="14" CornerRadius="8" BorderThickness="1" Margin="0,0,0,8"
+                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="Eigene Lobby öffnen" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="LobbyOpenHint" FontSize="12" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                                <Button x:Name="LobbyOpenBtn" Grid.Column="1" Content="Öffnen" Margin="12,0,0,0" Style="{DynamicResource AccentButtonStyle}" Click="LobbyOpen_Click"/>
+                            </Grid>
+                        </Border>
+
+                        <Border Padding="14" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="Beitreten" FontWeight="SemiBold"/>
+                                    <TextBlock Text="Code von dem, der die Lobby geöffnet hat." FontSize="12" TextWrapping="Wrap"
+                                               Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                </StackPanel>
+                                <TextBox x:Name="LobbyCode" Grid.Column="1" Width="96" Margin="12,0,8,0" MaxLength="5" CharacterCasing="Upper"
+                                         FontFamily="Cascadia Mono, Consolas" FontSize="16" TextAlignment="Center" VerticalAlignment="Center"
+                                         KeyDown="LobbyCode_KeyDown"/>
+                                <Button x:Name="LobbyJoinBtn" Grid.Column="2" Content="Beitreten" Click="LobbyJoin_Click" VerticalAlignment="Center"/>
+                            </Grid>
+                        </Border>
+                        <TextBlock x:Name="LobbyError" Margin="0,12,0,0" TextWrapping="Wrap" Visibility="Collapsed"
+                                   Foreground="{DynamicResource SystemFillColorCautionBrush}"/>
+                    </StackPanel>
+
+                    <StackPanel x:Name="LobbyInside" Visibility="Collapsed">
+                        <Border Padding="14" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource CardBackgroundFillColorDefaultBrush}" BorderBrush="{DynamicResource CardStrokeColorDefaultBrush}">
+                            <StackPanel>
+                                <TextBlock x:Name="LobbyInsideTitle" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                                <TextBlock x:Name="LobbyBigCode" HorizontalAlignment="Center" FontSize="40" FontWeight="SemiBold"
+                                           FontFamily="Cascadia Mono, Consolas" Margin="0,4,0,8"/>
+                                <Button Content="Code kopieren" HorizontalAlignment="Center" Click="LobbyCopy_Click"/>
+                            </StackPanel>
+                        </Border>
+                        <TextBlock Text="In der Lobby" FontWeight="SemiBold" Margin="0,16,0,6"/>
+                        <TextBlock x:Name="LobbyMembersText" TextWrapping="Wrap" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
+                        <TextBlock x:Name="LobbyHostHint" Margin="0,12,0,0" TextWrapping="Wrap" FontSize="12"
+                                   Foreground="{DynamicResource TextFillColorSecondaryBrush}"
+                                   Text="Rechtsklick auf einen Sound → „Schenken an“, um ihn jemandem zu geben. Gäste können dich auch fragen – du entscheidest."/>
+                        <Button Content="Lobby verlassen" HorizontalAlignment="Left" Margin="0,16,0,0" Click="LobbyLeave_Click"/>
+                    </StackPanel>
+
+                    <Button x:Name="LobbyDoneBtn" Content="Schließen" HorizontalAlignment="Right" Margin="0,20,0,0" Click="LobbyClose_Click"/>
                 </StackPanel>
             </Border>
         </Grid>

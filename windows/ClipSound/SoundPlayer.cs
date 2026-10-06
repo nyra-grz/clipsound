@@ -101,7 +101,8 @@ public sealed class SoundPlayer : IDisposable
         }
     }
 
-    public void Play(Sound sound)
+    /// <param name="delay">Start erst nach dieser Zeit (Lobby: alle starten gleichzeitig)</param>
+    public void Play(Sound sound, TimeSpan delay = default)
     {
         var source = Open(sound.Path, out var reader, out var total);
 
@@ -122,6 +123,12 @@ public sealed class SoundPlayer : IDisposable
             source = new WdlResamplingSampleProvider(source, MixFormat.SampleRate);
         }
 
+        if (delay > TimeSpan.FromMilliseconds(5))
+        {
+            // Stille davor statt Timer: startet auf die Millisekunde genau im Mixer
+            source = new OffsetSampleProvider(source) { DelayBy = delay };
+            totalOut += (long)(delay.TotalSeconds * MixFormat.SampleRate) * MixFormat.Channels;
+        }
         var voice = new Voice(sound.FileName, source, reader, Math.Max(1, totalOut));
         voice.Ended += () => OnVoiceEnded(voice);
         lock (_lock) _voices.Add(voice);

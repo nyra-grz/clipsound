@@ -103,6 +103,7 @@ public static class Updater
         }
 
         Process.Start(new ProcessStartInfo(exe, "--updated") { UseShellExecute = false, WorkingDirectory = dir });
+        MainWindow.Quitting = true; // sonst würde das Fenster nur in den Infobereich wandern
         System.Windows.Application.Current.Shutdown();
     }
 

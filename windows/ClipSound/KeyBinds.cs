@@ -17,10 +17,19 @@ public sealed record KeyBind(int Vk, int Mods, string Label)
     public const int Alt = 0x1, Ctrl = 0x2, Shift = 0x4;
 
     /// <summary>
-    /// Mit Umschalt + Strg oder Alt funktioniert die Kombination auch im Hintergrund.
-    /// (Strg+Alt allein ist auf deutschen Tastaturen AltGr – damit würde man @, € usw. kaputt machen.)
+    /// Mit Alt (z. B. Alt+2) oder Strg+Umschalt funktioniert die Kombination überall, auch im Hintergrund.
+    /// Strg allein bleibt lokal, sonst wären Strg+C/V usw. in allen Apps weg.
+    /// Strg+Alt ohne Umschalt ist auf deutschen Tastaturen AltGr – damit würde man @, € usw. kaputt machen.
     /// </summary>
-    public bool IsGlobal => (Mods & Shift) != 0 && (Mods & (Ctrl | Alt)) != 0;
+    public bool IsGlobal
+    {
+        get
+        {
+            bool alt = (Mods & Alt) != 0, ctrl = (Mods & Ctrl) != 0, shift = (Mods & Shift) != 0;
+            if (alt && ctrl && !shift) return false;
+            return alt || (ctrl && shift);
+        }
+    }
 
     public string Display
     {

@@ -15,17 +15,23 @@ public sealed class TileViewModel : INotifyPropertyChanged
         Color.FromRgb(0x10, 0x89, 0x3E), Color.FromRgb(0x00, 0x99, 0xBC), Color.FromRgb(0x5C, 0x2E, 0x91), Color.FromRgb(0xD1, 0x34, 0x38),
     };
 
-    public TileViewModel(Sound sound)
+    /// <param name="lobby">Sound des Hosts, wenn man als Gast in einer Lobby ist</param>
+    public TileViewModel(Sound sound, LobbySound? lobby = null)
     {
         Sound = sound;
+        Lobby = lobby;
         uint h = 0;
-        foreach (char c in sound.FileName) unchecked { h = h * 31 + c; }
+        // Farbe nach dem Originalnamen, damit Host und Gast dieselbe sehen
+        foreach (char c in lobby?.Name ?? sound.FileName) unchecked { h = h * 31 + c; }
         Tint = new SolidColorBrush(Tints[h % (uint)Tints.Length]);
         Tint.Freeze();
     }
 
     public Sound Sound { get; }
-    public string Title => Sound.Title;
+    public LobbySound? Lobby { get; }
+    public string Title => Lobby?.Title ?? Sound.Title;
+    /// <summary>Gast: Datei wird noch geladen</summary>
+    public bool IsLoading => Lobby is not null && Lobby.Local is null;
     public string FileName => Sound.FileName;
     public Brush Tint { get; }
 
