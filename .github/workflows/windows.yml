@@ -152,12 +152,16 @@ jobs:
           # 2) Windows ist Host, fremder Gast tritt bei, drückt und fragt
           $winLog = "$pwd\shots\lobby-win-host.txt"
           $w = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds", '--lobby-host', '--lobby-accept', '--lobby-log', $winLog, '--lobby-exit-after', '30' -PassThru
-          for ($i = 0; $i -lt 30 -and -not (Select-String -Path $winLog -Pattern 'hochgeladen=(\d+)/\1' -Quiet -ErrorAction SilentlyContinue); $i++) { Start-Sleep 1 }
+          for ($i = 0; $i -lt 30; $i++) {
+            Start-Sleep 1
+            if ((Test-Path $winLog) -and (Select-String -Path $winLog -Pattern 'hochgeladen=(\d+)/\1' -Quiet)) { break }
+          }
           Write-Host "Windows-Host läuft noch: $(-not $w.HasExited)"
           if (Test-Path $winLog) { Get-Content $winLog } else { Write-Host '(kein Log vom Windows-Host)' }
           $crash = Join-Path $env:TEMP 'clipsound-crash.txt'
           if (Test-Path $crash) { Write-Host 'ABSTURZ:'; Get-Content $crash }
-          $code2 = ((Select-String -Path $winLog -Pattern 'code=(\w{5})' -ErrorAction SilentlyContinue).Matches | Select-Object -First 1).Groups[1].Value
+          $code2 = if (Test-Path $winLog) { ((Select-String -Path $winLog -Pattern 'code=(\w{5})').Matches | Select-Object -First 1).Groups[1].Value } else { '' }
+          if (-not $code2) { Write-Host 'Windows-Host hat keine Lobby geöffnet'; exit 1 }
           Write-Host "Windows-Lobby: $code2"
           node cloud/lobby-tool.mjs guest $url $code2 10 | Tee-Object shots\lobby-node-gast.txt | ForEach-Object { $_.Substring(0, [Math]::Min(150, $_.Length)) }
           $w.WaitForExit(60000) | Out-Null
