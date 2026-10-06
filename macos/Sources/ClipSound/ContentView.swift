@@ -215,33 +215,22 @@ struct ContentView: View {
     }
 
     var body: some View {
-        Group {
-            if board.inGuestLobby {
-                lobbyGrid
-            } else if library.sounds.isEmpty {
-                ContentUnavailableView {
-                    Label("Keine Sounds", systemImage: "waveform")
-                } description: {
-                    Text("Zieh Sound-Dateien oder einen ganzen Ordner in dieses Fenster.")
-                } actions: {
-                    Button("Sounds importieren …", action: board.openImportPanel)
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                }
-            } else if board.visible.isEmpty {
-                ContentUnavailableView.search(text: board.query)
-            } else {
-                grid
+        GeometryReader { geo in
+            VStack(spacing: 0) {
+                soundArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
+                Divider()
+                MixerView(player: player)
+                    .frame(height: geo.size.height / 2)
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 updateBar
                 if board.lobby.active { LobbyBar(lobby: board.lobby, showLobby: $showLobby) }
             }
         }
-        .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: board.lobby, library: library) }
         .alert(requestTitle, isPresented: requestShown, presenting: board.lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { board.lobby.answer(request, ok: true) }
@@ -287,6 +276,28 @@ struct ContentView: View {
             Button("OK") {}
         } message: { text in
             Text(text)
+        }
+    }
+
+    private var soundArea: some View {
+        Group {
+            if board.inGuestLobby {
+                lobbyGrid
+            } else if library.sounds.isEmpty {
+                ContentUnavailableView {
+                    Label("Keine Sounds", systemImage: "waveform")
+                } description: {
+                    Text("Zieh Sound-Dateien oder einen ganzen Ordner in dieses Fenster.")
+                } actions: {
+                    Button("Sounds importieren …", action: board.openImportPanel)
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                }
+            } else if board.visible.isEmpty {
+                ContentUnavailableView.search(text: board.query)
+            } else {
+                grid
+            }
         }
     }
 
@@ -561,13 +572,15 @@ struct PadView: View {
 
     @State private var hovering = false
 
-    /// Feste Systemfarbe pro Sound, damit man Kacheln wiedererkennt
-    private var tint: Color {
+    /// Feste Systemfarbe pro Sound, damit man Kacheln (und Mischpult-Kanäle) wiedererkennt
+    static func tint(for id: String) -> Color {
         let colors: [Color] = [.blue, .purple, .pink, .orange, .green, .teal, .indigo, .red]
         var h: UInt32 = 0
-        for unit in sound.id.utf16 { h = h &* 31 &+ UInt32(unit) }
+        for unit in id.utf16 { h = h &* 31 &+ UInt32(unit) }
         return colors[Int(h % UInt32(colors.count))]
     }
+
+    private var tint: Color { Self.tint(for: sound.id) }
 
     var body: some View {
         let playing = progress != nil

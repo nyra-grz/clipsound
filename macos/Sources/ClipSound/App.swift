@@ -10,6 +10,7 @@ import Combine
 //   --recorder           Aufnahme-Fenster für den ersten Sound öffnen (für Screenshots)
 //   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
 //   --update-now         verfügbares Update ohne Nachfrage installieren
+//   --mixer-demo         drei Sounds gleichzeitig starten, einen auf 160 %, einen ausblenden (für Screenshots)
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
 //   --lobby-host         Lobby mit den eigenen Sounds öffnen, Code und Ereignisse ausgeben
 //   --lobby-join <code>  Lobby beitreten, Ereignisse ausgeben
@@ -69,6 +70,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let secs = LaunchArgs.value("--lobby-exit-after").flatMap(Double.init) {
             DispatchQueue.main.asyncAfter(deadline: .now() + secs) {
                 print("LOBBY: ende bibliothek=\(self.board?.library.sounds.count ?? -1)"); fflush(stdout); exit(0)
+            }
+        }
+        if LaunchArgs.args.contains("--mixer-demo") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
+                guard let player = self.board?.player, let sounds = self.board?.library.sounds else { return }
+                let overlap = player.overlap
+                player.overlap = true
+                for sound in sounds.prefix(3) { _ = player.play(sound) }
+                player.overlap = overlap
+                if player.channels.count > 1 { player.setLevel(1.6, for: player.channels[1].id) }
+                if player.channels.count > 2 { player.fadeOut(player.channels[2].id) }
+                print("MIXER: kanäle=\(player.channels.map { "\($0.title) \(Int($0.level * 100))%" })"); fflush(stdout)
             }
         }
         if LaunchArgs.args.contains("--selftest") {
@@ -196,7 +209,7 @@ struct ClipSoundApp: App {
     var body: some Scene {
         Window("ClipSound", id: "main") {
             ContentView(board: board, updater: updater)
-                .frame(minWidth: 620, minHeight: 380)
+                .frame(minWidth: 720, minHeight: 560)
                 .onAppear { delegate.board = board }
                 .task {
                     // Beim Start nach Updates schauen (nicht bei Testläufen)
