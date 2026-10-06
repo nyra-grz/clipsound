@@ -129,14 +129,18 @@ final class Board: ObservableObject {
     private func record(_ event: NSEvent) {
         guard let sound = recording else { return }
         let bind = KeyBind(event: event)
-        if bind.flags.contains(.command) {
-            recorderNote = "Kombinationen mit ⌘ sind für Menübefehle reserviert."
+        if bind.flags.contains(.command) && bind.flags.isDisjoint(with: [.control, .option]) {
+            recorderNote = "⌘ allein ist für Menübefehle reserviert – nimm ⌃ oder ⌥ dazu."
             return
         }
         if let previous = keys.set(bind, for: sound.id) {
             let name = library.sounds.first { $0.id == previous }?.title ?? previous
             recorderNote = "\(bind.display) war bei „\(name)“ – dort ist sie jetzt entfernt."
             return // offen lassen, damit man den Hinweis sieht
+        }
+        if let char = bind.blockedCharacter {
+            recorderNote = "Gespeichert. Hinweis: \(bind.display) tippt sonst „\(char)“ – das geht in anderen Apps nicht mehr, solange ClipSound läuft."
+            return
         }
         stopRecording()
     }
@@ -359,7 +363,7 @@ struct ContentView: View {
                     .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 Text("Drück eine Taste oder Kombination.")
                     .foregroundStyle(.secondary)
-                Label("Mit ⌃ (ctrl) geht sie auch, wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord.",
+                Label("Mit ⌃ (ctrl) oder ⌥ (alt) geht sie überall, auch wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord.",
                       systemImage: "globe")
                     .font(.callout)
                     .foregroundStyle(.secondary)
@@ -637,7 +641,7 @@ struct PadView: View {
         switch hotKey {
         case .global: "Funktioniert auch im Hintergrund · Klicken zum Ändern"
         case .failed: "Diese Kombination nutzt schon eine andere App – nur im ClipSound-Fenster aktiv · Klicken zum Ändern"
-        case .local: "Nur im ClipSound-Fenster · Klicken zum Ändern"
+        case .local: "Nur im ClipSound-Fenster – mit ⌃ oder ⌥ geht sie überall · Klicken zum Ändern"
         }
     }
 }

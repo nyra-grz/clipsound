@@ -76,7 +76,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// Fenster zu heißt nicht beenden: die Tastenkürzel sollen weiter überall gehen (beenden mit ⌘Q)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillTerminate(_ notification: Notification) {
         board?.lobby.leave() // Lobby sauber verlassen, fremde Sounds aus dem Cache räumen
@@ -101,10 +102,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return "binds=\(binds.count) erste: \(shown.joined(separator: ", ")) global=\(board.hotKeyState(for: sound))"
         }
         print("KEYTEST vorher: \(status())")
-        // ⌃⌥K: keyCode 40
-        board.keys.set(KeyBind(keyCode: 40, flags: [.control, .option]), for: sound.id)
+        // ⌥2: keyCode 19 – muss auch im Hintergrund gehen
+        board.keys.set(KeyBind(keyCode: 19, flags: [.option]), for: sound.id)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            print("KEYTEST nachher: \(status())")
+            print("KEYTEST nachher: \(status()) blockiert=\(board.keys.binds[sound.id]?.blockedCharacter ?? "-")")
+            fflush(stdout)
+        }
+        // Zeit, um von außen ⌥2 zu drücken (siehe Test); gespielt wird über den globalen Kürzel
+        var fired = false
+        for i in 1...40 {
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.1) {
+                if !fired, !board.player.progress.isEmpty { fired = true; print("KEYTEST: gespielt \(board.player.progress.keys.sorted())"); fflush(stdout) }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.2) {
+            if !fired { print("KEYTEST: nichts gespielt") }
+            board.player.stopAll()
             fflush(stdout)
             exit(0)
         }

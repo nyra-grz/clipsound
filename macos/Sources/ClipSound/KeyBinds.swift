@@ -12,8 +12,17 @@ struct KeyBind: Codable, Equatable {
 
     var flags: NSEvent.ModifierFlags { NSEvent.ModifierFlags(rawValue: modifiers) }
 
-    /// Mit ⌃ funktioniert die Kombination auch, wenn ClipSound im Hintergrund ist
-    var isGlobal: Bool { flags.contains(.control) }
+    /// Mit ⌃, ⌥ oder ⌘ funktioniert die Kombination überall, auch wenn ClipSound im Hintergrund ist.
+    /// Nur ⇧ oder gar nichts bleibt im Fenster – sonst könnte man woanders keine Großbuchstaben mehr tippen.
+    var isGlobal: Bool { !flags.intersection([.control, .option, .command]).isEmpty }
+
+    /// Zeichen, das diese Kombination sonst in anderen Apps tippen würde (z. B. ⌥L → „@“ auf deutscher Tastatur)
+    var blockedCharacter: String? {
+        guard flags.contains(.option), flags.isDisjoint(with: [.control, .command]) else { return nil }
+        var carbon: UInt32 = UInt32(optionKey)
+        if flags.contains(.shift) { carbon |= UInt32(shiftKey) }
+        return Self.layoutCharacter(for: keyCode, modifiers: carbon, uppercase: false)
+    }
 
     /// In Apples Reihenfolge: ⌃⌥⇧⌘
     var display: String {
@@ -57,7 +66,7 @@ struct KeyBind: Codable, Equatable {
         return layoutCharacter(for: keyCode) ?? "#\(keyCode)"
     }
 
-    private static func layoutCharacter(for keyCode: UInt16) -> String? {
+    private static func layoutCharacter(for keyCode: UInt16, modifiers: UInt32 = 0, uppercase: Bool = true) -> String? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let ptr = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
         let data = Unmanaged<CFData>.fromOpaque(ptr).takeUnretainedValue() as Data
@@ -66,11 +75,12 @@ struct KeyBind: Codable, Equatable {
         var length = 0
         let status = data.withUnsafeBytes { raw -> OSStatus in
             guard let layout = raw.bindMemory(to: UCKeyboardLayout.self).baseAddress else { return -1 }
-            return UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDisplay), 0, UInt32(LMGetKbdType()),
+            return UCKeyTranslate(layout, keyCode, UInt16(kUCKeyActionDisplay), (modifiers >> 8) & 0xFF, UInt32(LMGetKbdType()),
                                   OptionBits(kUCKeyTranslateNoDeadKeysBit), &deadKeys, chars.count, &length, &chars)
         }
         guard status == noErr, length > 0 else { return nil }
-        let s = String(utf16CodeUnits: chars, count: length).uppercased()
+        let raw = String(utf16CodeUnits: chars, count: length)
+        let s = uppercase ? raw.uppercased() : raw
         return s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : s
     }
 
