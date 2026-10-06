@@ -407,12 +407,26 @@ final class Lobby: ObservableObject {
             return
         }
         // Beide haben zugestimmt → Kopie mit Originalnamen in die eigene Bibliothek
-        guard let id = msg["id"] as? String, let sound = sounds.first(where: { $0.id == id }), let file = sound.local else { return }
+        guard let id = msg["id"] as? String, let sound = sounds.first(where: { $0.id == id }) else { return }
+        if let file = sound.local, let data = try? Data(contentsOf: file.url) { saveReceived(sound, data); return }
+        // Schon zugestimmt, aber noch nicht fertig geladen: jetzt direkt holen
+        let url = server.appendingPathComponent("api/lobbies/\(code)/blobs/\(sound.id)")
+        Task {
+            if let (data, resp) = try? await session.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200,
+               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sound.id {
+                await MainActor.run { self.saveReceived(sound, data) }
+            } else {
+                await MainActor.run { self.note = "„\(sound.title)“ konnte nicht gespeichert werden." }
+            }
+        }
+    }
+
+    private func saveReceived(_ sound: LobbySound, _ data: Data) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let copy = dir.appendingPathComponent(sound.name)
         do {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try FileManager.default.copyItem(at: file.url, to: copy)
+            try data.write(to: copy)
             onReceive?(copy)
             note = "„\(sound.title)“ ist jetzt in deinen Sounds."
         } catch {

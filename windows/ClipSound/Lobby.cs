@@ -412,13 +412,30 @@ public sealed class Lobby
         }
         // Beide haben zugestimmt → Kopie mit Originalnamen in die eigene Bibliothek
         var sound = Sounds.FirstOrDefault(s => s.Id == (string?)msg["id"]);
-        if (sound?.Local is null) return;
+        if (sound is null) return;
+        if (sound.Local is not null) { SaveReceived(sound, File.ReadAllBytes(sound.Local.Path)); return; }
+        // Schon zugestimmt, aber noch nicht fertig geladen: jetzt direkt holen
+        var code = Code;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var data = await _http.GetByteArrayAsync(new Uri(Server, $"api/lobbies/{code}/blobs/{sound.Id}"));
+                if (Convert.ToHexStringLower(SHA256.HashData(data)) == sound.Id) { OnUi(() => SaveReceived(sound, data)); return; }
+            }
+            catch { }
+            Say($"„{sound.Title}“ konnte nicht gespeichert werden.");
+        });
+    }
+
+    private void SaveReceived(LobbySound sound, byte[] data)
+    {
         var dir = Path.Combine(Path.GetTempPath(), "ClipSound-" + Guid.NewGuid().ToString("N"));
         try
         {
             Directory.CreateDirectory(dir);
             var copy = Path.Combine(dir, sound.Name);
-            File.Copy(sound.Local.Path, copy);
+            File.WriteAllBytes(copy, data);
             Receive?.Invoke(copy);
             Note?.Invoke($"„{sound.Title}“ ist jetzt in deinen Sounds.");
         }
