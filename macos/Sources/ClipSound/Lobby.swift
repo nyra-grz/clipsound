@@ -24,6 +24,10 @@ struct LobbyMember: Identifiable, Hashable, Decodable {
     let id: String
     let name: String
     let host: Bool
+    /// Gemeldete Lautstärke 0…1 (nil = Gerät meldet keine)
+    var volume: Double?
+    /// true = echte Lautsprecher, false = nur die App (z. B. im Browser)
+    var system: Bool?
 }
 
 /// Eine offene Frage an mich: Gast möchte einen Sound behalten (an den Host) oder Host bietet einen an (an den Gast)
@@ -71,6 +75,10 @@ final class Lobby: ObservableObject {
     var onStop: (() -> Void)?
     /// Gast: Zustimmung da – Datei mit Originalnamen in die eigene Bibliothek übernehmen
     var onReceive: ((URL) -> Void)?
+    /// Echte Lautsprecher lesen/stellen (Mac). Ohne das meldet das Gerät keine Lautstärke.
+    var systemVolume: (get: () -> Double?, set: (Double) -> Bool)?
+    private var reportedVolume: Double?
+    private var volumeTimer: Timer?
 
     let server: URL
     private let session = URLSession(configuration: .default)
@@ -159,6 +167,8 @@ final class Lobby: ObservableObject {
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         pingTimer?.invalidate(); pingTimer = nil
+        volumeTimer?.invalidate(); volumeTimer = nil
+        reportedVolume = nil
         syncTask?.cancel(); syncTask = nil
         code = ""; isHost = false; hostToken = nil; hostName = ""
         members = []; sounds = []; requests = []; uploaded = nil
@@ -205,6 +215,29 @@ final class Lobby: ObservableObject {
         guard let sha = hostIDs[sound.id] else { note = "„\(sound.title)“ ist noch nicht in der Lobby."; return }
         send(["type": "offer", "id": sha, "to": member.id])
         note = "„\(sound.title)“ an \(member.name) angeboten …"
+    }
+
+    // MARK: Lautstärke (versteckt: dreimal auf den Code klicken)
+
+    /// Host stellt die Lautsprecher eines anderen Geräts ein
+    func setVolume(of member: LobbyMember, to level: Double) {
+        guard isHost, member.id != me else { return }
+        if let i = members.firstIndex(where: { $0.id == member.id }) { members[i].volume = level }
+        send(["type": "setvolume", "to": member.id, "level": level])
+    }
+
+    /// Eigene Lautsprecher (auch der Host stellt sich selbst über diesen Weg ein)
+    func setOwnVolume(_ level: Double) {
+        guard systemVolume?.set(level) == true else { return }
+        reportVolume()
+    }
+
+    private func reportVolume() {
+        guard phase == .open, let level = systemVolume?.get() else { return }
+        let rounded = (level * 100).rounded() / 100
+        guard rounded != reportedVolume else { return }
+        reportedVolume = rounded
+        send(["type": "volume", "level": rounded, "system": true])
     }
 
     func answer(_ request: LobbyRequest, ok: Bool) {
@@ -361,6 +394,11 @@ final class Lobby: ObservableObject {
             setMembers(msg["members"])
             setSounds(msg["sounds"])
             if isHost { hostLibraryChanged(pendingFiles) } // nach Neuverbindung Liste auffrischen
+            // Lautstärke melden, auch wenn man sie selbst am Mac ändert
+            reportedVolume = nil
+            reportVolume()
+            volumeTimer?.invalidate()
+            volumeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in self?.reportVolume() }
         case "sounds":
             setSounds(msg["sounds"])
         case "members":
@@ -386,6 +424,12 @@ final class Lobby: ObservableObject {
                                          soundID: id, soundName: name, by: by))
         case "answered":
             answered(msg)
+        case "setvolume":
+            guard let level = msg["level"] as? Double, let set = systemVolume?.set else { return }
+            if set(level) {
+                note = "\(msg["by"] as? String ?? "Der Host") hat deine Lautstärke auf \(Int((level * 100).rounded())) % gestellt"
+                reportVolume()
+            }
         case "closed":
             problem = msg["reason"] as? String
         default:

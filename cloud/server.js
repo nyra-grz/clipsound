@@ -20,7 +20,10 @@
 //            offered {req, id, name, by}          (an einen Gast: Host bietet einen Sound an)
 //            answered {req, id, name, ok, kind}   (an beide: Ergebnis; kind = ask | offer)
 //            closed {reason}                      (Lobby ist zu, danach Close 4410)
-//   Client → play {id}, stop {}, ping {t}, ask {id}, offer {id, to}, answer {req, ok}
+//            setvolume {level, by}               (an ein Gerät: der Host stellt die Lautstärke ein, 0…1)
+//   Client → play {id}, stop {}, ping {t}, ask {id}, offer {id, to}, answer {req, ok},
+//            volume {level, system}  (eigene Lautstärke melden; system = echte Lautsprecher, sonst nur App)
+//            setvolume {to, level}   (nur Host)
 //   Close-Codes: 4404 Lobby gibt's nicht, 4401 falscher Host-Token, 4409 voll, 4410 geschlossen, 4429 zu viele Versuche
 const http = require('http');
 const fs = require('fs');
@@ -328,7 +331,7 @@ const lobbies = new Map();  // code → Set<ws>
 const hostAway = new Map(); // code → seit wann kein Host verbunden ist
 const requests = new Map(); // req → {code, kind, id, name, guest, host, at}
 
-const members = code => [...(lobbies.get(code) || [])].map(ws => ({ id: ws.id, name: ws.name, host: ws.isHost }));
+const members = code => [...(lobbies.get(code) || [])].map(ws => ({ id: ws.id, name: ws.name, host: ws.isHost, volume: ws.volume, system: ws.volumeSystem }));
 const findMember = (code, id) => [...(lobbies.get(code) || [])].find(ws => ws.id === id);
 const sendTo = (ws, msg) => { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); };
 function broadcast(code, msg) {
@@ -353,6 +356,21 @@ async function onMessage(ws, code, raw) {
     return broadcast(code, { type: 'play', id: msg.id, by: ws.name, from: ws.id, at: now + PLAY_DELAY });
   }
   if (msg.type === 'stop') return broadcast(code, { type: 'stop', by: ws.name, from: ws.id });
+
+  // Lautstärke: jedes Gerät meldet seine, nur der Host darf sie bei anderen ändern
+  if (msg.type === 'volume' && typeof msg.level === 'number') {
+    const level = Math.round(Math.min(1, Math.max(0, msg.level)) * 100) / 100;
+    if (level === ws.volume && !!msg.system === ws.volumeSystem) return;
+    ws.volume = level; ws.volumeSystem = !!msg.system;
+    clearTimeout(ws.volumeTimer); // beim Ziehen am Regler nicht jede Stufe verteilen
+    ws.volumeTimer = setTimeout(() => broadcast(code, { type: 'members', members: members(code) }), 150);
+    return;
+  }
+  if (msg.type === 'setvolume' && ws.isHost && typeof msg.level === 'number') {
+    const target = findMember(code, msg.to);
+    if (!target || target === ws) return;
+    return sendTo(target, { type: 'setvolume', level: Math.min(1, Math.max(0, msg.level)), by: ws.name });
+  }
 
   // Gast fragt: „Darf ich den Sound behalten?“ → Host entscheidet
   if (msg.type === 'ask' && !ws.isHost && isId(msg.id)) {

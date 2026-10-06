@@ -43,6 +43,7 @@ final class Board: ObservableObject {
         }
         lobby.onStop = { [weak self] in self?.player.stopAll() }
         lobby.onReceive = { [weak self] url in self?.importItems([url]) }
+        lobby.systemVolume = (get: SystemVolume.get, set: SystemVolume.set)
         // Änderungen der Lobby an die Oberfläche weiterreichen
         lobby.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }

@@ -16,6 +16,7 @@ import Combine
 //   --lobby-accept       Anfragen/Angebote automatisch annehmen
 //   --lobby-play-first   als Gast den ersten Sound drücken und danach behalten wollen
 //   --lobby-exit-after <s> nach s Sekunden beenden
+//   --lobby-volumes      die versteckten Lautstärke-Regler gleich öffnen
 //   Server ändern: Umgebungsvariable CLIPSOUND_SERVER
 enum LaunchArgs {
     static let args = ProcessInfo.processInfo.arguments

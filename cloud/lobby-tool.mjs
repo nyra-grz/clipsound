@@ -107,6 +107,17 @@ if (mode === 'check') {
   G.sendJ({ type: 'answer', req: off.req, ok: true });
   ok((await G.next('answered')).ok, 'Angebot angenommen');
 
+  // Lautstärke: Gast meldet, Host stellt ein, Gast darf andere nicht stellen
+  G.sendJ({ type: 'volume', level: 0.42, system: true });
+  let mem;
+  do { mem = await H.next('members'); } while (!mem.members.some(m => m.volume === 0.42));
+  ok(mem.members.find(m => m.id === gh.you).system === true, 'Host sieht die Lautstärke des Gasts (42 %, echte Lautsprecher)');
+  H.sendJ({ type: 'setvolume', to: gh.you, level: 0.8 });
+  const sv = await G.next('setvolume');
+  ok(sv.level === 0.8 && sv.by === 'Daniel', 'Host stellt den Gast auf 80 %');
+  G.sendJ({ type: 'setvolume', to: hh.you, level: 0 });
+  ok(await H.none('setvolume'), 'Gast darf den Host nicht leiser stellen');
+
   const nope = await fetch(`${base}/api/lobbies/ZZZZZ`);
   ok(nope.status === 404, 'Falscher Code → 404');
   const G2 = client('ZZZZZ', 'X');

@@ -502,7 +502,9 @@ public partial class MainWindow : Window
     private void SetUpLobby()
     {
         LobbyName.Text = _settings.LobbyName ?? "";
-        _lobby.Changed += () => { Render(); UpdateLobbyUi(); LobbyTestStep(); };
+        _lobby.GetSystemVolume = SystemVolume.Get;
+        _lobby.SetSystemVolume = SystemVolume.Set;
+        _lobby.Changed += () => { Render(); UpdateLobbyUi(); UpdateVolumeRows(); LobbyTestStep(); };
         _lobby.Note += ShowToast;
         _lobby.Ended += text => { LobbyLog("ende: " + text); LobbyError.Text = text; LobbyError.Visibility = Visibility.Visible; if (LobbyPanel.Visibility != Visibility.Visible) ShowError(text); Render(); UpdateLobbyUi(); };
         _lobby.Play += (sound, delay) => PlayLocal(sound, delay, Path.GetFileNameWithoutExtension(sound.FileName));
@@ -607,6 +609,82 @@ public partial class MainWindow : Window
         _lobby.Leave();
         Render();
         UpdateLobbyUi();
+    }
+
+    // ---------- Lautstärke der Geräte (versteckt) ----------
+
+    private void LobbyCode_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 3) return;
+        _volumeRowIds = "";
+        UpdateVolumeRows();
+        VolumePopup.IsOpen = true;
+        e.Handled = true;
+    }
+
+    private string _volumeRowIds = "";
+    private readonly Dictionary<string, (Slider Slider, TextBlock Value)> _volumeRows = new();
+
+    /// <summary>Zeilen nur neu bauen, wenn sich die Leute ändern – sonst springt der Regler beim Ziehen</summary>
+    private void UpdateVolumeRows()
+    {
+        if (!_lobby.Active) { VolumePopup.IsOpen = false; return; }
+        var ids = string.Join(",", _lobby.Members.Select(m => m.Id + (m.Volume is null ? "-" : "+")));
+        if (ids != _volumeRowIds)
+        {
+            _volumeRowIds = ids;
+            VolumeRows.Children.Clear();
+            _volumeRows.Clear();
+            foreach (var m in _lobby.Members)
+            {
+                bool me = m.Id == _lobby.Me;
+                var row = new StackPanel { Margin = new Thickness(0, 4, 0, 4) };
+                var head = new Grid();
+                head.Children.Add(new TextBlock { Text = (m.Host ? "👑 " : "") + m.Name + (me ? " (du)" : "") });
+                var value = new TextBlock { HorizontalAlignment = HorizontalAlignment.Right };
+                value.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+                head.Children.Add(value);
+                row.Children.Add(head);
+                if (m.Volume is null)
+                {
+                    value.Text = "–";
+                    var none = new TextBlock { Text = "Dieses Gerät meldet keine Lautstärke.", FontSize = 12 };
+                    none.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+                    row.Children.Add(none);
+                }
+                else
+                {
+                    var slider = new Slider { Minimum = 0, Maximum = 1, SmallChange = 0.02, LargeChange = 0.1, IsMoveToPointEnabled = true,
+                                              IsEnabled = me || _lobby.IsHost, Value = m.Volume.Value };
+                    var member = m;
+                    slider.ValueChanged += (_, e) =>
+                    {
+                        value.Text = $"{Math.Round(e.NewValue * 100)} %";
+                        if (!slider.IsMouseCaptureWithin && !slider.IsKeyboardFocusWithin) return; // nur echte Bedienung
+                        if (me) _lobby.SetOwnVolume(e.NewValue); else _lobby.SetVolume(member, e.NewValue);
+                    };
+                    value.Text = $"{Math.Round(m.Volume.Value * 100)} %";
+                    row.Children.Add(slider);
+                    if (m.System == false)
+                    {
+                        var app = new TextBlock { Text = "Nur die App – im Browser geht es nicht anders.", FontSize = 11 };
+                        app.SetResourceReference(TextBlock.ForegroundProperty, "TextFillColorSecondaryBrush");
+                        row.Children.Add(app);
+                    }
+                    _volumeRows[m.Id] = (slider, value);
+                }
+                VolumeRows.Children.Add(row);
+            }
+            VolumeHint.Text = _lobby.IsHost
+                ? "Stellt die echten Lautsprecher ein. Die anderen sehen eine Meldung, wenn du ihre änderst."
+                : "Nur der Host kann die anderen einstellen.";
+            return;
+        }
+        foreach (var m in _lobby.Members)
+        {
+            if (m.Volume is not { } v || !_volumeRows.TryGetValue(m.Id, out var r) || r.Slider.IsMouseCaptureWithin) continue;
+            r.Slider.Value = v;
+        }
     }
 
     private void LobbyClose_Click(object sender, RoutedEventArgs e) { LobbyPanel.Visibility = Visibility.Collapsed; Keyboard.Focus(this); }

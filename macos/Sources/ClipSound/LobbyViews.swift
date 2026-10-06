@@ -5,6 +5,7 @@ import AppKit
 struct LobbyBar: View {
     @ObservedObject var lobby: Lobby
     @Binding var showLobby: Bool
+    @State private var showVolumes = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -16,7 +17,9 @@ struct LobbyBar: View {
                         Text(lobby.isHost ? "Deine Lobby" : "Lobby von \(lobby.hostName)").font(.headline)
                         Text(lobby.code)
                             .font(.system(.headline, design: .monospaced))
-                            .textSelection(.enabled)
+                            .onTapGesture(count: 3) { showVolumes = true } // versteckt
+                            .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
+                            .onAppear { if LaunchArgs.args.contains("--lobby-volumes") { showVolumes = true } }
                     }
                     Text(status).font(.caption).foregroundStyle(.secondary)
                 }
@@ -200,5 +203,70 @@ struct LobbySheet: View {
                 .font(.callout).foregroundStyle(.secondary)
         }
         Button("Lobby verlassen", role: .destructive) { lobby.leave() }
+    }
+}
+
+/// Versteckt: dreimal auf den Lobby-Code klicken. Der Host stellt hier die echten Lautsprecher
+/// jedes Geräts ein, alle anderen nur ihre eigenen.
+struct VolumeMixer: View {
+    @ObservedObject var lobby: Lobby
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Lautstärke der Geräte").font(.headline)
+            ForEach(lobby.members) { member in
+                VolumeRow(lobby: lobby, member: member)
+            }
+            Text(lobby.isHost
+                 ? "Stellt die echten Lautsprecher ein. Die anderen sehen eine Meldung, wenn du ihre änderst."
+                 : "Nur der Host kann die anderen einstellen.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(width: 320)
+    }
+}
+
+private struct VolumeRow: View {
+    @ObservedObject var lobby: Lobby
+    let member: LobbyMember
+    @State private var value: Double = 0
+    @State private var editing = false
+
+    private var isMe: Bool { member.id == lobby.me }
+    private var canEdit: Bool { member.volume != nil && (isMe || lobby.isHost) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Label(member.name + (isMe ? " (du)" : ""), systemImage: member.host ? "crown" : "person")
+                Spacer()
+                Text(member.volume == nil ? "–" : "\(Int((value * 100).rounded())) %")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            if member.volume != nil {
+                HStack(spacing: 6) {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.caption)
+                    Slider(value: $value, in: 0...1) { editing = $0 }
+                        .controlSize(.small)
+                        .disabled(!canEdit)
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.caption)
+                }
+                if member.system == false {
+                    Text("Nur die App – im Browser geht es nicht anders.").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Dieses Gerät meldet keine Lautstärke.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { value = member.volume ?? 0 }
+        .onChange(of: member.volume) { _, new in if !editing, let new { value = new } }
+        .onChange(of: value) { _, new in
+            guard editing else { return }
+            if isMe { lobby.setOwnVolume(new) } else { lobby.setVolume(of: member, to: new) }
+        }
     }
 }

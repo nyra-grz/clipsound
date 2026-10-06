@@ -24,7 +24,9 @@ public sealed class LobbySound
     public string Title => System.Text.RegularExpressions.Regex.Replace(Path.GetFileNameWithoutExtension(Name), "[-_]+", " ");
 }
 
-public sealed record LobbyMember(string Id, string Name, bool Host);
+/// <param name="Volume">Gemeldete Lautstärke 0…1 (null = Gerät meldet keine)</param>
+/// <param name="System">true = echte Lautsprecher, false = nur die App (z. B. im Browser)</param>
+public sealed record LobbyMember(string Id, string Name, bool Host, double? Volume = null, bool? System = null);
 
 /// <summary>Offene Frage an mich: Gast will einen Sound behalten (an den Host) oder Host bietet einen an (an den Gast)</summary>
 public sealed record LobbyRequest(string Req, bool Asked, string SoundId, string SoundName, string By)
@@ -61,6 +63,11 @@ public sealed class Lobby
     public event Action<LobbyRequest>? Request;
     /// <summary>Gast: beide haben zugestimmt – Datei mit Originalnamen in die eigene Bibliothek übernehmen</summary>
     public event Action<string>? Receive;
+    /// <summary>Echte Lautsprecher lesen/stellen. Ohne das meldet das Gerät keine Lautstärke.</summary>
+    public Func<double?>? GetSystemVolume { get; set; }
+    public Func<double, bool>? SetSystemVolume { get; set; }
+    private double? _reportedVolume;
+    private System.Threading.Timer? _volumeTimer;
 
     public readonly Uri Server;
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
@@ -138,6 +145,7 @@ public sealed class Lobby
         try { _socket?.Abort(); } catch { }
         _socket = null;
         _pingTimer?.Dispose(); _pingTimer = null;
+        _volumeTimer?.Dispose(); _volumeTimer = null; _reportedVolume = null;
         _syncCts?.Cancel();
         Code = ""; IsHost = false; _hostToken = null; HostName = "";
         Members = new(); Sounds = new(); Uploaded = null;
@@ -190,6 +198,31 @@ public sealed class Lobby
     }
 
     public void Answer(LobbyRequest request, bool ok) => Send(new { type = "answer", req = request.Req, ok });
+
+    // ---------- Lautstärke (versteckt: dreimal auf den Code klicken) ----------
+
+    /// <summary>Host stellt die Lautsprecher eines anderen Geräts ein</summary>
+    public void SetVolume(LobbyMember member, double level)
+    {
+        if (!IsHost || member.Id == Me) return;
+        Members = Members.Select(m => m.Id == member.Id ? m with { Volume = level } : m).ToList();
+        Send(new { type = "setvolume", to = member.Id, level });
+    }
+
+    /// <summary>Eigene Lautsprecher</summary>
+    public void SetOwnVolume(double level)
+    {
+        if (SetSystemVolume?.Invoke(level) == true) ReportVolume();
+    }
+
+    private void ReportVolume()
+    {
+        if (Phase != LobbyPhase.Open || GetSystemVolume?.Invoke() is not { } level) return;
+        var rounded = Math.Round(level, 2);
+        if (rounded == _reportedVolume) return;
+        _reportedVolume = rounded;
+        Send(new { type = "volume", level = rounded, system = true });
+    }
 
     // ---------- Host: eigene Sounds in die Lobby bringen ----------
 
@@ -367,6 +400,11 @@ public sealed class Lobby
                 if (_bestRtt == double.MaxValue) _offset = (double)msg["serverTime"]! - NowMs;
                 SetMembers(msg["members"]); SetSounds(msg["sounds"]);
                 if (IsHost) HostLibraryChanged(_pendingFiles); // nach Neuverbindung Liste auffrischen
+                // Lautstärke melden, auch wenn man sie selbst in Windows ändert
+                _reportedVolume = null;
+                ReportVolume();
+                _volumeTimer?.Dispose();
+                _volumeTimer = new System.Threading.Timer(_ => OnUi(ReportVolume), null, 1500, 1500);
                 break;
             case "sounds": SetSounds(msg["sounds"]); break;
             case "members": SetMembers(msg["members"]); break;
@@ -395,6 +433,16 @@ public sealed class Lobby
                     (string)msg["id"]!, (string)msg["name"]!, (string)msg["by"]!));
                 return;
             case "answered": Answered(msg); return;
+            case "setvolume":
+            {
+                var level = (double)msg["level"]!;
+                if (SetSystemVolume?.Invoke(level) == true)
+                {
+                    Note?.Invoke($"{(string?)msg["by"] ?? "Der Host"} hat deine Lautstärke auf {Math.Round(level * 100)} % gestellt");
+                    ReportVolume();
+                }
+                return;
+            }
             case "closed": _closedReason = (string?)msg["reason"]; return;
         }
         Changed?.Invoke();
@@ -446,7 +494,8 @@ public sealed class Lobby
     private void SetMembers(JsonNode? raw)
     {
         if (raw is not JsonArray arr) return;
-        Members = arr.Select(m => new LobbyMember((string)m!["id"]!, (string)m["name"]!, (bool?)m["host"] ?? false)).ToList();
+        Members = arr.Select(m => new LobbyMember((string)m!["id"]!, (string)m["name"]!, (bool?)m["host"] ?? false,
+            (double?)m["volume"], (bool?)m["system"])).ToList();
     }
 
     private void SetSounds(JsonNode? raw)
