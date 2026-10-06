@@ -46,7 +46,8 @@ final class SoundPlayer: ObservableObject {
         }
     }
 
-    func play(_ sound: Sound) -> Bool {
+    /// `delay`: Start in so vielen Sekunden (Lobby: alle starten zur gleichen Zeit)
+    func play(_ sound: Sound, delay: TimeInterval = 0) -> Bool {
         if !overlap { stopAll() }
         guard let file = try? AVAudioFile(forReading: sound.url) else { return false }
         if !engine.isRunning {
@@ -62,7 +63,11 @@ final class SoundPlayer: ObservableObject {
         node.scheduleFile(file, at: nil, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             DispatchQueue.main.async { self?.finish(id) }
         }
-        node.play()
+        if delay > 0.005 {
+            node.play(at: AVAudioTime(hostTime: mach_absolute_time() + AVAudioTime.hostTime(forSeconds: delay)))
+        } else {
+            node.play()
+        }
         progress[sound.id] = 0
         startTimer()
         return true

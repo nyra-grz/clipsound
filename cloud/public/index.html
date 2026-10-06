@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ClipSound Lobby</title>
+<style>
+  :root {
+    --bg: #0c0e16; --panel: rgba(255,255,255,.05); --panel-solid: #171a25; --text: #f4f5fa; --muted: #8a8fa6;
+    --line: rgba(255,255,255,.09); --accent-a: #ff5f6d; --accent-b: #ffc371; --danger: #ff3b5c;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text); min-height: 100vh;
+    font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background:
+      radial-gradient(900px 500px at 10% -10%, rgba(255,95,109,.16), transparent 60%),
+      radial-gradient(800px 500px at 100% 0%, rgba(127,127,213,.16), transparent 60%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+
+  /* ---------- Kopfzeile ---------- */
+  header {
+    position: sticky; top: 0; z-index: 5;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    padding: 14px 20px;
+    background: rgba(12,14,22,.72); backdrop-filter: blur(18px) saturate(1.4); -webkit-backdrop-filter: blur(18px) saturate(1.4);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; margin-right: 6px; }
+  .logo {
+    width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; font-size: 20px;
+    background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+    box-shadow: 0 6px 20px rgba(255,95,109,.35);
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: -.02em; line-height: 1.1; white-space: nowrap; }
+  .count { color: var(--muted); font-size: 12px; font-weight: 500; }
+
+  .searchwrap { position: relative; flex: 1 1 200px; min-width: 0; }
+  .searchwrap svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+  input[type=search] {
+    width: 100%; padding: 11px 40px 11px 38px; border-radius: 12px; outline: none;
+    border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit;
+    transition: border-color .15s, background .15s;
+  }
+  input[type=search]:focus { border-color: rgba(255,195,113,.6); background: rgba(255,255,255,.08); }
+  .searchwrap kbd { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); }
+  kbd {
+    font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; background: rgba(255,255,255,.04);
+  }
+
+  button { font: inherit; cursor: pointer; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px; height: 42px; padding: 0 16px; border-radius: 12px;
+    font-weight: 650; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    transition: transform .08s, filter .15s, background .15s;
+  }
+  .btn:hover { filter: brightness(1.1); }
+  .btn:active { transform: scale(.96); }
+  .btn-upload { border: 0; color: #1a0f12; background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); box-shadow: 0 6px 18px rgba(255,95,109,.3); }
+  .btn-stop { border-color: rgba(255,59,92,.45); color: #ff8a9e; background: rgba(255,59,92,.12); }
+  .btn-stop:hover { background: rgba(255,59,92,.22); }
+
+  .switch { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 550; cursor: pointer; user-select: none; height: 42px; padding: 0 4px; }
+  .switch input { position: absolute; opacity: 0; pointer-events: none; }
+  .track { width: 36px; height: 22px; border-radius: 99px; background: rgba(255,255,255,.14); position: relative; transition: background .15s; }
+  .track::after { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .15s; }
+  .switch input:checked + .track { background: linear-gradient(135deg, var(--accent-a), var(--accent-b)); }
+  .switch input:checked + .track::after { transform: translateX(14px); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent-b); outline-offset: 2px; }
+
+  .vol {
+    display: inline-flex; align-items: center; gap: 10px; height: 42px; padding: 0 12px; border-radius: 12px;
+    background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 13px;
+  }
+  .vol input { width: 130px; accent-color: var(--accent-b); }
+  #volPct { min-width: 46px; text-align: right; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; }
+  #volPct.boost { color: var(--danger); }
+
+  /* ---------- Pads ---------- */
+  main { padding: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+  .pad {
+    --g1: #ff5f6d; --g2: #ffc371;
+    position: relative; overflow: hidden; height: 104px; padding: 12px 14px;
+    border-radius: 18px; cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+    display: flex; align-items: flex-end;
+    background: linear-gradient(135deg, var(--g1), var(--g2));
+    box-shadow: 0 1px 0 rgba(255,255,255,.25) inset, 0 8px 24px -10px var(--g1);
+    color: #fff; font-weight: 750; font-size: 15px; line-height: 1.2; letter-spacing: -.01em;
+    text-shadow: 0 1px 3px rgba(0,0,0,.35);
+    transition: transform .08s ease, box-shadow .2s, filter .15s;
+  }
+  .pad::before { /* Glanz */
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: linear-gradient(160deg, rgba(255,255,255,.28), transparent 45%);
+  }
+  .pad:hover { filter: brightness(1.08) saturate(1.05); transform: translateY(-2px); }
+  .pad:active { transform: scale(.95); }
+  .pad .name { position: relative; z-index: 1; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
+  .pad .key {
+    position: absolute; top: 10px; left: 12px; z-index: 1; min-width: 22px; height: 22px; padding: 0 6px;
+    display: grid; place-items: center; text-shadow: none;
+    font: 700 11px ui-monospace, SFMono-Regular, Menlo, monospace; color: #fff;
+    background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.25); border-radius: 7px;
+  }
+  .pad .del {
+    position: absolute; top: 8px; right: 8px; z-index: 2; height: 26px; min-width: 26px; padding: 0 7px;
+    border-radius: 8px; border: 0; background: rgba(0,0,0,.28); color: #fff; font-size: 12px; font-weight: 700;
+    opacity: 0; transition: opacity .12s, background .12s;
+  }
+  .pad:hover .del, .pad .del.confirm { opacity: 1; }
+  .pad .del:hover { background: rgba(0,0,0,.45); }
+  .pad .del.confirm { background: var(--danger); }
+  @media (hover: none) { .pad .del { opacity: .85; } }
+  .pad .bar { position: absolute; left: 0; bottom: 0; height: 4px; width: 0; z-index: 1; background: rgba(255,255,255,.95); box-shadow: 0 0 10px #fff; }
+  .pad .wave { position: absolute; right: 12px; bottom: 12px; z-index: 1; display: none; gap: 3px; align-items: flex-end; height: 16px; }
+  .pad .wave i { width: 3px; background: #fff; border-radius: 2px; animation: wave .8s ease-in-out infinite; }
+  .pad .wave i:nth-child(2) { animation-delay: -.25s; } .pad .wave i:nth-child(3) { animation-delay: -.5s; }
+  @keyframes wave { 0%,100% { height: 4px; } 50% { height: 16px; } }
+  .pad.playing { box-shadow: 0 0 0 3px #fff, 0 0 32px -2px var(--g1); }
+  .pad.playing .wave { display: flex; }
+  .pad.playing .name { padding-right: 26px; }
+
+  .empty {
+    display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center;
+    color: var(--muted); padding: 72px 20px; border: 2px dashed var(--line); border-radius: 22px; background: var(--panel);
+  }
+  .empty .big { font-size: 46px; }
+  .empty b { color: var(--text); font-size: 17px; }
+  .empty[hidden] { display: none; }
+
+  .hint { display: flex; flex-wrap: wrap; gap: 6px 14px; color: var(--muted); font-size: 12px; padding: 0 20px 24px; }
+
+  .drop {
+    position: fixed; inset: 12px; z-index: 10; display: none; flex-direction: column; gap: 8px; align-items: center; justify-content: center;
+    border-radius: 24px; background: rgba(12,14,22,.9); border: 3px dashed var(--accent-b);
+    font-size: 26px; font-weight: 800; color: var(--accent-b);
+  }
+  .drop span { font-size: 56px; }
+  body.dragging .drop { display: flex; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translate(-50%, 20px); z-index: 20; opacity: 0; pointer-events: none;
+    background: var(--panel-solid); border: 1px solid var(--line); padding: 11px 18px; border-radius: 12px;
+    max-width: calc(100% - 32px); box-shadow: 0 12px 32px rgba(0,0,0,.4); transition: opacity .2s, transform .2s;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.err { border-color: rgba(255,59,92,.6); color: #ffb3c0; }
+
+  @media (max-width: 600px) {
+    header { padding: 12px 16px; }
+    main { padding: 16px; }
+    .hint { padding: 0 16px 20px; }
+    .grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+    .pad { height: 92px; }
+    .vol { flex: 1; } .vol input { flex: 1; width: auto; }
+    .searchwrap kbd { display: none; }
+  }
+
+  /* ---------- Räume ---------- */
+  .lobby { max-width: 420px; margin: 0 auto; padding: 12vh 16px 0; display: flex; flex-direction: column; gap: 14px; }
+  .lobby h2 { font-size: 26px; margin: 0; letter-spacing: -.02em; }
+  .lobby p { margin: 0; color: var(--muted); }
+  .lobby .card { display: flex; flex-direction: column; gap: 10px; padding: 18px; border-radius: 18px; background: var(--panel); border: 1px solid var(--line); }
+  .lobby label { font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .field {
+    width: 100%; height: 44px; padding: 0 14px; border-radius: 12px; outline: none;
+    border: 1px solid var(--line); background: rgba(255,255,255,.04); color: var(--text); font: inherit;
+  }
+  .field:focus { border-color: rgba(255,195,113,.6); }
+  #codeIn { font: 700 18px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
+  .row { display: flex; gap: 10px; }
+  .row .field { flex: 1; min-width: 0; }
+  .lobby .btn { justify-content: center; }
+  .or { text-align: center; color: var(--muted); font-size: 12px; }
+
+  .roominfo { display: flex; align-items: center; gap: 8px; height: 42px; padding: 0 6px 0 12px; border-radius: 12px; background: var(--panel); border: 1px solid var(--line); }
+  .roominfo code { font: 700 14px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .08em; }
+  .roominfo .btn { height: 32px; padding: 0 10px; font-size: 13px; border-radius: 9px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #8a8fa6; flex: none; }
+  .dot.on { background: #38d27d; }
+  .members { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 12px; color: var(--muted); font-size: 12px; align-items: center; }
+  .members span.m { padding: 3px 9px; border-radius: 99px; background: var(--panel); border: 1px solid var(--line); color: var(--text); }
+  .members span.m.me { border-color: rgba(255,195,113,.5); }
+  .pad .who { position: absolute; top: 10px; left: 44px; z-index: 1; font-size: 11px; font-weight: 650; text-shadow: none; padding: 2px 7px; border-radius: 99px; background: rgba(0,0,0,.28); display: none; }
+  .pad.playing .who:not(:empty) { display: block; }
+  .pad.loading { opacity: .55; }
+  .unlock {
+    position: fixed; inset: 0; z-index: 15; display: grid; place-items: center; padding: 16px;
+    background: rgba(12,14,22,.82); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  }
+  .unlock .btn { height: 54px; padding: 0 24px; font-size: 17px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) { .members { padding: 0 16px 10px; } .lobby { padding-top: 8vh; } }
+
+  #codeIn { font: 700 22px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .3em; text-align: center; }
+  .pad .gift {
+    position: absolute; top: 8px; right: 8px; z-index: 2; height: 24px; padding: 0 8px; border-radius: 8px; border: 0;
+    background: rgba(0,0,0,.28); color: #fff; font-size: 12px; font-weight: 700; opacity: 0; transition: opacity .12s;
+  }
+  .pad:hover .gift { opacity: 1; }
+  @media (hover: none) { .pad .gift { opacity: .85; } }
+  .pad.playing .gift { display: none; }
+  .ask {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 25; width: min(440px, calc(100% - 32px));
+    display: flex; flex-direction: column; gap: 12px; padding: 16px; border-radius: 16px;
+    background: var(--panel-solid); border: 1px solid var(--line); box-shadow: 0 16px 40px rgba(0,0,0,.5);
+  }
+  .ask b { font-size: 16px; }
+  .ask p { margin: 0; color: var(--muted); font-size: 13px; }
+  .ask .row { justify-content: flex-end; }
+  .ask .list { display: flex; flex-direction: column; gap: 6px; }
+  .ask .list .btn { justify-content: flex-start; }
+  .role { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- Lobby öffnen oder beitreten -->
+<section class="lobby" id="lobby">
+  <div class="brand"><div class="logo">🔊</div><div><h1>ClipSound Lobby</h1><div class="count">Ein Board, alle hören gleichzeitig</div></div></div>
+  <div class="card">
+    <label for="nameIn">Dein Name</label>
+    <input class="field" id="nameIn" maxlength="24" placeholder="z. B. Daniel" autocomplete="nickname">
+  </div>
+  <div class="card">
+    <label for="codeIn">Lobby-Code</label>
+    <div class="row">
+      <input class="field" id="codeIn" maxlength="5" placeholder="ABC12" autocomplete="off" spellcheck="false" autocapitalize="characters">
+      <button class="btn" id="joinBtn">Beitreten</button>
+    </div>
+    <div class="or">oder</div>
+    <button class="btn btn-upload" id="createBtn">Eigene Lobby öffnen</button>
+    <p class="role">Als Host bringst du die Sounds mit. Mit der Mac-, Windows- oder iPhone-App sind das deine eigenen Sounds.</p>
+  </div>
+</section>
+
+<!-- Lobby -->
+<div id="room" hidden>
+<header>
+  <div class="brand">
+    <div class="logo">🔊</div>
+    <div><h1 id="roomTitle">ClipSound</h1><div class="count" id="count"></div></div>
+  </div>
+  <div class="roominfo" title="Code oder Link teilen">
+    <span class="dot" id="dot"></span><code id="codeOut"></code>
+    <button class="btn" id="copyBtn">Link kopieren</button>
+    <button class="btn" id="leaveBtn">Verlassen</button>
+  </div>
+  <label class="searchwrap">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <input type="search" id="search" placeholder="Sound suchen…" autocomplete="off">
+    <kbd>/</kbd>
+  </label>
+  <button class="btn btn-upload" id="uploadBtn" hidden>
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    Sounds hinzufügen
+  </button>
+  <input type="file" id="file" accept="audio/*,.mp3,.wav,.ogg,.opus,.m4a,.aac,.webm,.flac" multiple hidden>
+  <button class="btn btn-stop" id="stopBtn" title="Bei allen stoppen (Esc)">
+    <svg width="12" height="12" viewBox="0 0 12 12"><rect width="12" height="12" rx="2.5" fill="currentColor"/></svg>
+    Stop
+  </button>
+  <label class="switch" title="Mehrere Sounds gleichzeitig abspielen"><input type="checkbox" id="overlap"><span class="track"></span>Überlappen</label>
+  <div class="vol" title="Deine Lautstärke (nur bei dir). Doppelklick = 100 %">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a10 10 0 0 1 0 14"/></svg>
+    <input type="range" id="vol" min="0" max="5" step="0.05" value="0.8">
+    <span id="volPct"></span>
+  </div>
+</header>
+
+<main>
+  <div class="members" id="members"></div>
+  <div class="grid" id="grid"></div>
+  <div class="empty" id="empty" hidden>
+    <div class="big">🎧</div>
+    <b id="emptyTitle">Noch keine Sounds</b>
+    <span id="emptyText"></span>
+  </div>
+</main>
+<div class="hint">
+  <span><kbd>1</kbd>–<kbd>0</kbd> <kbd>Q</kbd>–<kbd>P</kbd> spielen die ersten 20</span>
+  <span><kbd>Esc</kbd> stoppt bei allen</span>
+  <span id="hintKeep">„Behalten“ fragt den Host, ob du den Sound bekommst</span>
+</div>
+</div>
+
+<div class="drop"><span>🎵</span>Sounds in die Lobby laden</div>
+<div class="unlock" id="unlock" hidden><button class="btn btn-upload" id="unlockBtn">🔊 Tippen zum Mithören</button></div>
+<div class="ask" id="ask" hidden></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// Spricht dasselbe Protokoll wie die Apps (siehe cloud/server.js)
+const GRADIENTS = [
+  ['#ff5f6d','#ffc371'], ['#7f7fd5','#86a8e7'], ['#11998e','#38ef7d'], ['#fc466b','#3f5efb'],
+  ['#f7971e','#ffb800'], ['#00c6ff','#0072ff'], ['#ee0979','#ff6a00'], ['#8e2de2','#4a00e0'],
+];
+const KEYS = ['1','2','3','4','5','6','7','8','9','0','q','w','e','r','t','z','u','i','o','p'];
+const AUDIO_EXT = /\.(mp3|wav|ogg|opus|m4a|aac|webm|flac|aiff?|caf)$/i;
+
+const $ = id => document.getElementById(id);
+const grid = $('grid'), search = $('search'), vol = $('vol'), overlap = $('overlap');
+const store = {
+  get: (k, s = localStorage) => { try { return s.getItem(k); } catch { return null; } },
+  set: (k, v, s = localStorage) => { try { v == null ? s.removeItem(k) : s.setItem(k, v); } catch {} },
+};
+
+let code = null, hostToken = null, isHost = false, hostName = '', me = null;
+let sounds = [], members = [], ws = null, offset = 0, retry = 0;
+const buffers = new Map(); // id → AudioBuffer (vorgeladen, damit's sofort losgeht)
+const blobs = new Map();   // id → Blob (für „Behalten“)
+const playing = new Set();
+const asks = [];           // offene Fragen an mich
+
+const normCode = c => (c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
+const title = name => name.replace(AUDIO_EXT, '').replace(/[-_]+/g, ' ');
+const myName = () => $('nameIn').value.trim() || 'Gast';
+
+// ---------- Audio ----------
+let ctx, master;
+function audioOut() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    master = ctx.createGain();
+    master.gain.value = vol.value;
+    master.connect(ctx.destination);
+    ctx.onstatechange = checkAudio;
+  }
+  if (ctx.state === 'suspended') ctx.resume();
+  return master;
+}
+// iPhone: auch mit Stummschalter abspielen (Safari 16.4+)
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+// Browser lassen Audio erst nach einem Tippen zu. Wer per Link reinkommt, muss einmal tippen.
+function checkAudio() { $('unlock').hidden = !code || ctx?.state === 'running'; }
+addEventListener('pointerdown', () => { if (code) audioOut(); }, true);
+addEventListener('keydown', () => { if (code) audioOut(); }, true);
+
+function showVol() {
+  $('volPct').textContent = Math.round(vol.value * 100) + ' %';
+  $('volPct').classList.toggle('boost', vol.value > 1);
+}
+overlap.checked = store.get('overlap') === '1';
+vol.value = store.get('vol') ?? 0.8;
+showVol();
+overlap.onchange = () => store.set('overlap', overlap.checked ? '1' : '0');
+vol.oninput = () => { if (master) master.gain.value = vol.value; showVol(); store.set('vol', vol.value); };
+vol.ondblclick = () => { vol.value = 1; vol.oninput(); };
+
+async function preload(s) {
+  if (buffers.has(s.id)) return;
+  buffers.set(s.id, null);
+  try {
+    const blob = await (await fetch(`/api/lobbies/${code}/blobs/${s.id}`)).blob();
+    blobs.set(s.id, blob);
+    audioOut();
+    buffers.set(s.id, await ctx.decodeAudioData(await blob.arrayBuffer()));
+  } catch {
+    buffers.delete(s.id);
+  }
+  grid.querySelector(`[data-id="${s.id}"]`)?.classList.remove('loading');
+}
+
+function stopLocal() {
+  playing.forEach(src => { try { src.stop(); } catch {} });
+  playing.clear();
+  grid.querySelectorAll('.pad.playing').forEach(p => p.classList.remove('playing'));
+}
+
+// Startet zum Server-Zeitpunkt `at`, damit alle gleichzeitig hören
+function playLocal(id, at, by) {
+  const buf = buffers.get(id);
+  if (!buf) return;
+  if (ctx?.state !== 'running') return checkAudio(); // nicht einreihen, sonst kommt später alles auf einmal
+  if (!overlap.checked) stopLocal();
+  const delay = Math.max(0, (at - offset - Date.now()) / 1000);
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(master);
+  src.start(ctx.currentTime + delay);
+  playing.add(src);
+
+  const pad = grid.querySelector(`[data-id="${id}"]`);
+  if (!pad) { src.onended = () => playing.delete(src); return; }
+  const bar = pad.querySelector('.bar');
+  const startAt = performance.now() + delay * 1000;
+  pad.querySelector('.who').textContent = by && by !== myName() ? by : '';
+  pad.classList.add('playing');
+  let raf;
+  const tick = () => {
+    bar.style.width = Math.min(100, Math.max(0, (performance.now() - startAt) / 10 / buf.duration)) + '%';
+    raf = requestAnimationFrame(tick);
+  };
+  tick();
+  src.onended = () => { cancelAnimationFrame(raf); playing.delete(src); bar.style.width = 0; pad.classList.remove('playing'); };
+}
+
+// ---------- Verbindung ----------
+function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const q = new URLSearchParams({ lobby: code, name: myName() });
+  if (hostToken) q.set('token', hostToken);
+  const sock = ws = new WebSocket(`${proto}://${location.host}/ws?${q}`);
+  sock.onopen = () => { retry = 0; $('dot').classList.add('on'); syncClock(); };
+  sock.onclose = e => {
+    if (sock !== ws) return;
+    $('dot').classList.remove('on');
+    const why = { 4404: 'Diese Lobby gibt es nicht (mehr)', 4401: 'Lobby-Zugang ungültig', 4409: 'Die Lobby ist voll',
+                  4410: closedReason || 'Die Lobby wurde geschlossen', 4429: 'Zu viele falsche Codes, warte ein paar Minuten' }[e.code];
+    if (why) { toast(why, true); leave(); return; }
+    if (code) setTimeout(() => code && sock === ws && connect(), Math.min(10000, 500 * 2 ** retry++));
+  };
+  sock.onmessage = e => handle(JSON.parse(e.data));
+}
+
+let closedReason = null;
+function handle(msg) {
+  switch (msg.type) {
+    case 'hello':
+      me = msg.you; isHost = msg.isHost; hostName = msg.host;
+      offset = msg.serverTime - Date.now();
+      showRole(); setMembers(msg.members); setSounds(msg.sounds); break;
+    case 'sounds': setSounds(msg.sounds); break;
+    case 'members': setMembers(msg.members); break;
+    case 'play': playLocal(msg.id, msg.at, msg.by); break;
+    case 'stop': stopLocal(); if (msg.from !== me) toast(`${msg.by} hat gestoppt`); break;
+    case 'pong': clockSample(msg); break;
+    case 'asked': case 'offered': asks.push(msg); showAsk(); break;
+    case 'answered': answered(msg); break;
+    case 'closed': closedReason = msg.reason; break;
+  }
+}
+
+// Uhrzeit-Abgleich mit dem Server (wie NTP, beste von 5 Messungen)
+let clockBest = Infinity;
+function syncClock() {
+  clockBest = Infinity;
+  for (let i = 0; i < 5; i++) setTimeout(() => send({ type: 'ping', t: Date.now() }), i * 300);
+}
+function clockSample(msg) {
+  const now = Date.now(), rtt = now - msg.t;
+  if (rtt < clockBest) { clockBest = rtt; offset = msg.serverTime - (msg.t + rtt / 2); }
+}
+setInterval(() => send({ type: 'ping', t: Date.now() }), 20000); // hält die Verbindung wach
+
+function setSounds(list) {
+  sounds = list;
+  for (const id of [...buffers.keys()]) if (!list.some(s => s.id === id)) { buffers.delete(id); blobs.delete(id); }
+  render();
+  list.forEach(preload);
+}
+
+function setMembers(list) {
+  members = list;
+  const box = $('members');
+  box.innerHTML = '';
+  box.append(list.length === 1 ? 'Nur du hier – schick den Code rum' : `${list.length} in der Lobby:`);
+  if (list.length > 1) list.forEach(m => {
+    const s = document.createElement('span');
+    s.className = 'm' + (m.id === me ? ' me' : '');
+    s.textContent = (m.host ? '👑 ' : '') + (m.id === me ? m.name + ' (du)' : m.name);
+    box.append(s);
+  });
+}
+
+function showRole() {
+  $('roomTitle').textContent = isHost ? 'Deine Lobby' : `Lobby von ${hostName}`;
+  $('uploadBtn').hidden = !isHost;
+  $('hintKeep').textContent = isHost ? '„Schenken“ gibt einen Sound an jemanden weiter – wenn er zustimmt'
+                                     : '„Behalten“ fragt den Host, ob du den Sound bekommst';
+  $('emptyTitle').textContent = isHost ? 'Noch keine Sounds in deiner Lobby' : 'Noch keine Sounds';
+  $('emptyText').textContent = isHost ? 'Zieh Sound-Dateien hier rein oder klick auf „Sounds hinzufügen“.'
+                                      : `${hostName} hat noch keine Sounds freigegeben.`;
+}
+
+// ---------- Behalten / Schenken (immer mit Zustimmung) ----------
+function showAsk() {
+  const box = $('ask'), a = asks[0];
+  if (!a) { box.hidden = true; return; }
+  const t = title(a.name);
+  box.innerHTML = `<b></b><p></p><div class="row"><button class="btn" data-ok="0">Ablehnen</button><button class="btn btn-upload" data-ok="1"></button></div>`;
+  box.querySelector('b').textContent = a.type === 'asked' ? `${a.by} möchte „${t}“ behalten` : `${a.by} schenkt dir „${t}“`;
+  box.querySelector('p').textContent = a.type === 'asked' ? `Der Sound wird bei ${a.by} gespeichert.` : 'Der Sound wird bei dir heruntergeladen.';
+  box.querySelector('[data-ok="1"]').textContent = a.type === 'asked' ? 'Erlauben' : 'Annehmen';
+  box.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => {
+    asks.shift();
+    send({ type: 'answer', req: a.req, ok: b.dataset.ok === '1' });
+    showAsk();
+  });
+  box.hidden = false;
+}
+
+function answered(msg) {
+  const t = title(msg.name || 'Sound');
+  if (isHost) { if (msg.ok) toast(`„${t}“ wurde weitergegeben`); else if (msg.kind === 'offer') toast(`„${t}“ wurde abgelehnt`); return; }
+  if (!msg.ok) { if (msg.kind === 'ask') toast(msg.reason || `${hostName} möchte „${t}“ nicht hergeben`, true); return; }
+  // Beide haben zugestimmt → Datei speichern
+  const blob = blobs.get(msg.id);
+  const s = sounds.find(x => x.id === msg.id);
+  if (!blob || !s) return toast('Datei nicht mehr da', true);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = s.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  toast(`„${t}“ wird gespeichert`);
+}
+
+function giftMenu(s) {
+  const guests = members.filter(m => !m.host);
+  if (!guests.length) return toast('Noch niemand da zum Schenken');
+  const box = $('ask');
+  box.innerHTML = `<b></b><div class="list"></div><div class="row"><button class="btn">Abbrechen</button></div>`;
+  box.querySelector('b').textContent = `„${title(s.name)}“ schenken an …`;
+  guests.forEach(m => {
+    const b = document.createElement('button');
+    b.className = 'btn'; b.textContent = m.name;
+    b.onclick = () => { send({ type: 'offer', id: s.id, to: m.id }); toast(`An ${m.name} angeboten …`); box.hidden = true; showAsk(); };
+    box.querySelector('.list').append(b);
+  });
+  box.querySelector('.row .btn').onclick = () => { box.hidden = true; showAsk(); };
+  box.hidden = false;
+}
+
+// ---------- Oberfläche ----------
+function gradientFor(name) {
+  let h = 0;
+  for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return GRADIENTS[h % GRADIENTS.length];
+}
+
+function toast(msg, err) {
+  const t = $('toast');
+  t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(toast.timer); toast.timer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+function visible() {
+  const q = search.value.trim().toLowerCase();
+  return q ? sounds.filter(s => title(s.name).toLowerCase().includes(q)) : sounds;
+}
+
+function render() {
+  const list = visible();
+  grid.innerHTML = '';
+  $('empty').hidden = sounds.length > 0;
+  $('count').textContent = sounds.length === 1 ? '1 Sound' : `${sounds.length} Sounds`;
+  list.forEach((s, i) => {
+    const pad = document.createElement('div');
+    pad.setAttribute('role', 'button');
+    pad.className = 'pad' + (buffers.get(s.id) ? '' : ' loading');
+    const [g1, g2] = gradientFor(s.name);
+    pad.style.setProperty('--g1', g1); pad.style.setProperty('--g2', g2);
+    pad.dataset.id = s.id;
+    pad.innerHTML = `<div class="bar"></div>${KEYS[i] ? `<span class="key">${KEYS[i].toUpperCase()}</span>` : ''}<span class="who"></span><span class="name"></span><span class="wave"><i></i><i></i><i></i></span><button class="gift"></button>`;
+    pad.querySelector('.name').textContent = title(s.name);
+    const gift = pad.querySelector('.gift');
+    gift.textContent = isHost ? 'Schenken' : 'Behalten';
+    gift.onclick = e => { e.stopPropagation(); isHost ? giftMenu(s) : (send({ type: 'ask', id: s.id }), toast(`Gefragt, ob du „${title(s.name)}“ behalten darfst …`)); };
+    pad.onclick = () => press(s.id);
+    grid.appendChild(pad);
+  });
+}
+
+function press(id) {
+  audioOut();
+  if (!buffers.get(id)) return toast('Lädt noch…');
+  if (ws?.readyState !== 1) return toast('Keine Verbindung, versuche neu…', true);
+  send({ type: 'play', id });
+}
+
+function stopAll() { stopLocal(); send({ type: 'stop' }); }
+
+// Host im Browser: Dateien hashen, Liste schicken, fehlende hochladen
+async function sha256(buf) {
+  const h = await crypto.subtle.digest('SHA-256', buf);
+  return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function addSounds(files) {
+  if (!isHost) return;
+  const auth = { Authorization: 'Bearer ' + hostToken };
+  const fresh = [];
+  for (const f of [...files]) {
+    if (!AUDIO_EXT.test(f.name)) { toast(`„${f.name}“ ist kein Sound`, true); continue; }
+    if (f.size > 15 * 1024 * 1024) { toast(`„${f.name}“ ist zu groß (max 15 MB)`, true); continue; }
+    fresh.push({ file: f, id: await sha256(await f.arrayBuffer()), name: f.name, size: f.size });
+  }
+  if (!fresh.length) return;
+  toast(`Lade ${fresh.length} Sound${fresh.length > 1 ? 's' : ''} hoch…`);
+  const list = [...sounds.map(({ id, name, size }) => ({ id, name, size })), ...fresh.filter(f => !sounds.some(s => s.id === f.id))];
+  const r = await fetch(`/api/lobbies/${code}/sounds`, { method: 'PUT', headers: auth, body: JSON.stringify({ sounds: list.map(({ id, name, size }) => ({ id, name, size })) }) });
+  if (!r.ok) return toast('Hochladen fehlgeschlagen', true);
+  const { missing, skipped } = await r.json();
+  for (const id of missing) {
+    const f = fresh.find(x => x.id === id);
+    if (!f) continue;
+    const up = await fetch(`/api/lobbies/${code}/blobs/${id}`, { method: 'PUT', headers: auth, body: f.file });
+    if (!up.ok) toast(`${f.name}: ${(await up.json().catch(() => ({}))).error || 'Fehler'}`, true);
+  }
+  toast(skipped.length ? `${skipped.length} zu groß für die Lobby (max 150 MB)` : 'Sounds sind in der Lobby 🎉', skipped.length > 0);
+}
+
+// ---------- Lobby öffnen / beitreten ----------
+$('nameIn').value = store.get('name') || '';
+$('nameIn').oninput = () => store.set('name', $('nameIn').value.trim());
+$('codeIn').oninput = () => { const c = normCode($('codeIn').value); if (c !== $('codeIn').value) $('codeIn').value = c; };
+
+async function enter(c, token) {
+  if (!token) {
+    const r = await fetch(`/api/lobbies/${c}`);
+    if (!r.ok) return toast((await r.json().catch(() => ({}))).error || 'Diese Lobby gibt es nicht', true);
+  }
+  code = c; hostToken = token || null; closedReason = null;
+  store.set('host', token ? JSON.stringify({ code: c, token }) : null, sessionStorage); // Neu laden = wieder Host
+  history.replaceState(null, '', '/l/' + c);
+  $('codeOut').textContent = c;
+  $('lobby').hidden = true; $('room').hidden = false;
+  isHost = !!token; hostName = isHost ? myName() : ''; showRole();
+  connect();
+  checkAudio();
+}
+function leave() {
+  code = null; hostToken = null; asks.length = 0; $('ask').hidden = true;
+  const old = ws; ws = null; old?.close();
+  store.set('host', null, sessionStorage);
+  stopLocal(); buffers.clear(); blobs.clear(); sounds = [];
+  history.replaceState(null, '', '/');
+  $('room').hidden = true; $('lobby').hidden = false;
+  checkAudio();
+}
+
+$('unlockBtn').onclick = () => audioOut();
+$('joinBtn').onclick = () => {
+  audioOut();
+  const c = normCode($('codeIn').value);
+  if (c.length !== 5) return toast('Der Code hat 5 Zeichen', true);
+  enter(c);
+};
+$('codeIn').onkeydown = e => { if (e.key === 'Enter') $('joinBtn').click(); };
+$('createBtn').onclick = async () => {
+  audioOut();
+  const r = await fetch('/api/lobbies', { method: 'POST', body: JSON.stringify({ name: myName() }) });
+  if (!r.ok) return toast('Lobby konnte nicht geöffnet werden', true);
+  const { code, hostToken } = await r.json();
+  enter(code, hostToken);
+};
+$('copyBtn').onclick = async () => {
+  try { await navigator.clipboard.writeText(location.href); toast(`Link kopiert – Code ${code}`); }
+  catch { toast(location.href); }
+};
+$('leaveBtn').onclick = leave;
+$('uploadBtn').onclick = () => $('file').click();
+$('file').onchange = e => { addSounds(e.target.files); e.target.value = ''; };
+$('stopBtn').onclick = stopAll;
+search.oninput = render;
+
+let dragDepth = 0;
+addEventListener('dragenter', e => { if (!isHost || !code) return; e.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+addEventListener('dragover', e => e.preventDefault());
+addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  if (e.dataTransfer.files.length) addSounds(e.dataTransfer.files);
+});
+
+addEventListener('keydown', e => {
+  if (!code || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === 'Escape') { stopAll(); search.blur(); return; }
+  if (document.activeElement === search) { if (e.key === 'Enter') { const f = visible()[0]; if (f) press(f.id); } return; }
+  if (document.activeElement?.tagName === 'INPUT') return;
+  if (e.key === '/') { e.preventDefault(); search.focus(); return; }
+  const i = KEYS.indexOf(e.key.toLowerCase());
+  const list = visible();
+  if (i >= 0 && list[i]) { e.preventDefault(); press(list[i].id); }
+});
+
+// Link /l/ABC12 öffnet direkt die Lobby; nach Neuladen bleibt man Host
+const fromUrl = normCode((/^\/l\/(.+)$/.exec(location.pathname) || [])[1]);
+if (fromUrl) {
+  let saved = null;
+  try { saved = JSON.parse(store.get('host', sessionStorage)); } catch {}
+  $('codeIn').value = fromUrl;
+  enter(fromUrl, saved?.code === fromUrl ? saved.token : null);
+}
+</script>
+</body>
+</html>

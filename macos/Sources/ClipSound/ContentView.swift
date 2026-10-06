@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 final class Board: ObservableObject {
     let library: SoundLibrary
     let player = SoundPlayer()
+    let lobby = Lobby()
     let keys: KeyBindStore
     private let hotKeys = GlobalHotKeys.shared
 
@@ -22,14 +23,29 @@ final class Board: ObservableObject {
 
     init(library: SoundLibrary) {
         self.library = library
-        keys = KeyBindStore(file: library.folder.deletingLastPathComponent().appendingPathComponent("keybinds.json"))
+        keys = KeyBindStore(file: library.settingsFolder.appendingPathComponent("keybinds.json"))
 
         hotKeys.onPress = { [weak self] id in
             guard let self, self.recording == nil, let sound = self.library.sounds.first(where: { $0.id == id }) else { return }
             self.play(sound)
         }
         library.$sounds
-            .sink { [weak self] sounds in self?.keys.sync(with: sounds) }
+            .sink { [weak self] sounds in
+                self?.keys.sync(with: sounds)
+                self?.lobby.hostLibraryChanged(sounds)
+            }
+            .store(in: &subscriptions)
+
+        // Lobby: Sounds starten erst, wenn der Server sie an alle verteilt hat
+        lobby.onPlay = { [weak self] sound, delay in
+            guard let self else { return }
+            if !self.player.play(sound, delay: delay) { self.problem = "„\(sound.title)“ konnte nicht abgespielt werden." }
+        }
+        lobby.onStop = { [weak self] in self?.player.stopAll() }
+        lobby.onReceive = { [weak self] url in self?.importItems([url]) }
+        // Änderungen der Lobby an die Oberfläche weiterreichen
+        lobby.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &subscriptions)
         keys.$binds
             .receive(on: DispatchQueue.main)
@@ -42,8 +58,33 @@ final class Board: ObservableObject {
         return q.isEmpty ? library.sounds : library.sounds.filter { $0.id.lowercased().contains(q) || $0.title.lowercased().contains(q) }
     }
 
+    /// Gast in einer fremden Lobby: dann zeigt das Fenster die Sounds des Hosts
+    var inGuestLobby: Bool { lobby.active && !lobby.isHost }
+
+    var visibleLobby: [LobbySound] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return q.isEmpty ? lobby.sounds : lobby.sounds.filter { $0.title.lowercased().contains(q) }
+    }
+
     func play(_ sound: Sound) {
+        // Als Host läuft alles über die Lobby, damit es bei allen gleichzeitig startet
+        if lobby.active && lobby.isHost {
+            if lobby.play(own: sound) { return }
+            lobby.note = "„\(sound.title)“ ist noch nicht in der Lobby – nur bei dir abgespielt."
+        }
         if !player.play(sound) { problem = "„\(sound.title)“ konnte nicht abgespielt werden." }
+    }
+
+    func play(_ sound: LobbySound) { lobby.play(sound) }
+
+    func stopAll() {
+        player.stopAll()
+        if lobby.active { lobby.stopAll() }
+    }
+
+    func playFirstVisible() {
+        if inGuestLobby { if let first = visibleLobby.first { play(first) } }
+        else if let first = visible.first { play(first) }
     }
 
     func delete(_ sound: Sound) {
@@ -133,7 +174,7 @@ final class Board: ObservableObject {
             return true
         }
         if event.keyCode == 53 { // Esc stoppt alles, im Suchfeld darf Esc zusätzlich leeren
-            player.stopAll()
+            stopAll()
             return !typingInSearch
         }
         guard !typingInSearch else { return false }
@@ -158,6 +199,7 @@ struct ContentView: View {
     @State private var dropTargeted = false
     @State private var updateDismissed = false
     @State private var pendingDelete: Sound?
+    @State private var showLobby = false
 
     init(board: Board, updater: Updater) {
         self.board = board
@@ -169,7 +211,9 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if library.sounds.isEmpty {
+            if board.inGuestLobby {
+                lobbyGrid
+            } else if library.sounds.isEmpty {
                 ContentUnavailableView {
                     Label("Keine Sounds", systemImage: "waveform")
                 } description: {
@@ -186,7 +230,22 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .safeAreaInset(edge: .top, spacing: 0) { updateBar }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                updateBar
+                if board.lobby.active { LobbyBar(lobby: board.lobby, showLobby: $showLobby) }
+            }
+        }
+        .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
+        .sheet(isPresented: $showLobby) { LobbySheet(lobby: board.lobby, library: library) }
+        .alert(requestTitle, isPresented: requestShown, presenting: board.lobby.requests.first) { request in
+            Button(request.kind == .asked ? "Erlauben" : "Annehmen") { board.lobby.answer(request, ok: true) }
+            Button("Ablehnen", role: .cancel) { board.lobby.answer(request, ok: false) }
+        } message: { request in
+            Text(request.kind == .asked
+                 ? "Der Sound wird in die Bibliothek von \(request.by) kopiert."
+                 : "Der Sound wird in deine Bibliothek kopiert.")
+        }
         .background(.background)
         .overlay { if dropTargeted { dropHighlight } }
         .overlay { if let sound = board.recording { recorder(for: sound) } }
@@ -195,9 +254,9 @@ struct ContentView: View {
             return true
         }
         .navigationTitle("ClipSound")
-        .navigationSubtitle(library.sounds.count == 1 ? "1 Sound" : "\(library.sounds.count) Sounds")
+        .navigationSubtitle(subtitle)
         .searchable(text: $board.query, isPresented: $board.searchFocused, placement: .toolbar, prompt: "Suchen")
-        .onSubmit(of: .search) { if let first = board.visible.first { board.play(first) } }
+        .onSubmit(of: .search) { board.playFirstVisible() }
         .toolbar { toolbar }
         .confirmationDialog("„\(pendingDelete?.title ?? "")“ löschen?", isPresented: deleteDialogShown, presenting: pendingDelete) { sound in
             Button("In den Papierkorb legen", role: .destructive) { board.delete(sound) }
@@ -213,6 +272,11 @@ struct ContentView: View {
             case .failed(let text): Text(text)
             default: Text("")
             }
+        }
+        .alert("Lobby", isPresented: lobbyProblemShown, presenting: board.lobby.problem) { _ in
+            Button("OK") {}
+        } message: { text in
+            Text(text)
         }
         .alert("ClipSound", isPresented: problemShown, presenting: board.problem) { _ in
             Button("OK") {}
@@ -235,6 +299,13 @@ struct ContentView: View {
                         Button("Abspielen", systemImage: "play") { board.play(sound) }
                         Button("Taste festlegen …", systemImage: "keyboard") { board.startRecording(sound) }
                         Button("Im Finder zeigen", systemImage: "folder") { library.revealInFinder(sound) }
+                        if board.lobby.isHost && !board.lobby.guests.isEmpty {
+                            Menu("Schenken an", systemImage: "gift") {
+                                ForEach(board.lobby.guests) { member in
+                                    Button(member.name) { board.lobby.offer(sound, to: member) }
+                                }
+                            }
+                        }
                         Divider()
                         Button("Löschen …", systemImage: "trash", role: .destructive) { pendingDelete = sound }
                     }
@@ -250,9 +321,9 @@ struct ContentView: View {
             Button("Importieren", systemImage: "plus", action: board.openImportPanel)
                 .help("Sound-Dateien oder einen Ordner importieren (⌘O)")
 
-            Button("Alles stoppen", systemImage: "stop.fill", action: player.stopAll)
-                .help("Alles stoppen (Esc)")
-                .disabled(player.progress.isEmpty)
+            Button("Alles stoppen", systemImage: "stop.fill", action: board.stopAll)
+                .help(board.lobby.active ? "Bei allen in der Lobby stoppen (Esc)" : "Alles stoppen (Esc)")
+                .disabled(player.progress.isEmpty && !board.lobby.active)
 
             Toggle(isOn: $player.overlap) {
                 Label("Überlappen", systemImage: "square.stack.3d.up")
@@ -261,6 +332,12 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .primaryAction) {
             VolumeControl(volume: $player.volume)
+        }
+        ToolbarItem(placement: .navigation) {
+            Button { showLobby = true } label: {
+                Label("Lobby", systemImage: board.lobby.active ? "person.2.fill" : "person.2")
+            }
+            .help("Zusammen abspielen: Lobby öffnen oder mit Code beitreten")
         }
     }
 
@@ -363,6 +440,58 @@ struct ContentView: View {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
+    private var subtitle: String {
+        let n = board.inGuestLobby ? board.lobby.sounds.count : library.sounds.count
+        let count = n == 1 ? "1 Sound" : "\(n) Sounds"
+        return board.inGuestLobby ? "Lobby von \(board.lobby.hostName) · \(count)" : count
+    }
+
+    private var requestTitle: String {
+        guard let r = board.lobby.requests.first else { return "" }
+        return r.kind == .asked ? "\(r.by) möchte „\(r.soundTitle)“ behalten" : "\(r.by) schenkt dir „\(r.soundTitle)“"
+    }
+
+    private var requestShown: Binding<Bool> {
+        Binding(get: { !board.lobby.requests.isEmpty }, set: { _ in })
+    }
+
+    private var lobbyProblemShown: Binding<Bool> {
+        Binding(get: { board.lobby.problem != nil && !showLobby }, set: { if !$0 { board.lobby.problem = nil } })
+    }
+
+    // MARK: Lobby als Gast
+
+    @ViewBuilder private var lobbyGrid: some View {
+        if board.lobby.sounds.isEmpty {
+            ContentUnavailableView {
+                Label(board.lobby.phase == .open ? "Noch keine Sounds" : "Verbinde …", systemImage: "person.2")
+            } description: {
+                Text(board.lobby.phase == .open ? "\(board.lobby.hostName) hat noch keine Sounds freigegeben." : "Einen Moment.")
+            }
+        } else if board.visibleLobby.isEmpty {
+            ContentUnavailableView.search(text: board.query)
+        } else {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
+                    ForEach(board.visibleLobby) { sound in
+                        PadView(sound: Sound(url: URL(fileURLWithPath: sound.name)),
+                                bind: nil,
+                                hotKey: .local,
+                                progress: sound.local.flatMap { player.progress[$0.id] },
+                                loading: sound.local == nil,
+                                onPlay: { board.play(sound) },
+                                onEditKey: {})
+                        .contextMenu {
+                            Button("Abspielen", systemImage: "play") { board.play(sound) }
+                            Button("Behalten …", systemImage: "square.and.arrow.down") { board.lobby.ask(sound) }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+        }
+    }
+
     private var problemShown: Binding<Bool> {
         Binding(get: { board.problem != nil }, set: { if !$0 { board.problem = nil } })
     }
@@ -412,6 +541,7 @@ struct PadView: View {
     let bind: KeyBind?
     let hotKey: Board.HotKeyState
     let progress: Double?
+    var loading = false
     let onPlay: () -> Void
     let onEditKey: () -> Void
 
@@ -464,6 +594,8 @@ struct PadView: View {
             .contentShape(shape)
         }
         .buttonStyle(PadButtonStyle())
+        .opacity(loading ? 0.5 : 1)
+        .overlay(alignment: .topTrailing) { if loading { ProgressView().controlSize(.mini).padding(10) } }
         // Tasten-Badge liegt außerhalb des Kachel-Buttons, damit er eigene Klicks bekommt
         .overlay(alignment: .topTrailing) { keyBadge.padding(8) }
         .onHover { hovering = $0 }

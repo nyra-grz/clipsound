@@ -4,12 +4,37 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @ObservedObject var library: SoundLibrary
     @ObservedObject var player: SoundPlayer
+    @ObservedObject var lobby: Lobby
+    @State private var showLobby = false
 
     @State private var query = ""
     @State private var importing = false
     @State private var pendingDelete: Sound?
     @State private var problem: String?
     @State private var tapCount = 0
+
+    /// Gast in einer fremden Lobby: dann zeigt die App die Sounds des Hosts
+    private var inGuestLobby: Bool { lobby.active && !lobby.isHost }
+
+    private var visibleLobby: [LobbySound] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return q.isEmpty ? lobby.sounds : lobby.sounds.filter { $0.title.lowercased().contains(q) }
+    }
+
+    private func play(_ sound: Sound) {
+        tapCount += 1
+        // Als Host läuft alles über die Lobby, damit es bei allen gleichzeitig startet
+        if lobby.active && lobby.isHost {
+            if lobby.play(own: sound) { return }
+            lobby.note = "„\(sound.title)“ ist noch nicht in der Lobby – nur bei dir abgespielt."
+        }
+        if !player.play(sound) { problem = "„\(sound.title)“ konnte nicht abgespielt werden." }
+    }
+
+    private func stopAll() {
+        player.stopAll()
+        if lobby.active { lobby.stopAll() }
+    }
 
     private var visible: [Sound] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
@@ -19,7 +44,9 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if library.sounds.isEmpty {
+                if inGuestLobby {
+                    lobbyGrid
+                } else if library.sounds.isEmpty {
                     ContentUnavailableView {
                         Label("Keine Sounds", systemImage: "waveform")
                     } description: {
@@ -34,18 +61,29 @@ struct ContentView: View {
                     grid
                 }
             }
-            .navigationTitle("ClipSound")
+            .navigationTitle(inGuestLobby ? "Lobby" : "ClipSound")
             .searchable(text: $query, prompt: "Suchen")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Alles stoppen", systemImage: "stop.fill", action: player.stopAll)
-                        .disabled(player.progress.isEmpty)
+                    Button("Alles stoppen", systemImage: "stop.fill", action: stopAll)
+                        .disabled(player.progress.isEmpty && !lobby.active)
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Lobby", systemImage: lobby.active ? "person.2.fill" : "person.2") { showLobby = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Importieren", systemImage: "plus") { importing = true }
                 }
             }
-            .safeAreaInset(edge: .bottom) { controls }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                if lobby.active { LobbyBar(lobby: lobby) { showLobby = true } }
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    LobbyNote(lobby: lobby)
+                    controls
+                }
+            }
         }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .folder], allowsMultipleSelection: true) { result in
             switch result {
@@ -64,6 +102,18 @@ struct ContentView: View {
         .alert("ClipSound", isPresented: problemShown, presenting: problem) { _ in
             Button("OK") {}
         } message: { Text($0) }
+        .sheet(isPresented: $showLobby) { LobbySheet(lobby: lobby, library: library) }
+        .alert(requestTitle, isPresented: requestShown, presenting: lobby.requests.first) { request in
+            Button(request.kind == .asked ? "Erlauben" : "Annehmen") { lobby.answer(request, ok: true) }
+            Button("Ablehnen", role: .cancel) { lobby.answer(request, ok: false) }
+        } message: { request in
+            Text(request.kind == .asked
+                 ? "Der Sound wird bei \(request.by) gespeichert."
+                 : "Der Sound kommt in deine Sounds.")
+        }
+        .alert("Lobby", isPresented: lobbyProblemShown, presenting: lobby.problem) { _ in
+            Button("OK") {}
+        } message: { Text($0) }
         .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
     }
 
@@ -71,12 +121,16 @@ struct ContentView: View {
         ScrollView {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
                 ForEach(visible) { sound in
-                    Tile(sound: sound, progress: player.progress[sound.id]) {
-                        tapCount += 1
-                        if !player.play(sound) { problem = "„\(sound.title)“ konnte nicht abgespielt werden." }
-                    }
+                    Tile(sound: sound, progress: player.progress[sound.id]) { play(sound) }
                     .contextMenu {
-                        Button("Abspielen", systemImage: "play") { _ = player.play(sound) }
+                        Button("Abspielen", systemImage: "play") { play(sound) }
+                        if lobby.isHost && !lobby.guests.isEmpty {
+                            Menu("Schenken an", systemImage: "gift") {
+                                ForEach(lobby.guests) { member in
+                                    Button(member.name) { lobby.offer(sound, to: member) }
+                                }
+                            }
+                        }
                         Button("Löschen", systemImage: "trash", role: .destructive) { pendingDelete = sound }
                     }
                 }
@@ -107,6 +161,51 @@ struct ContentView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+    }
+
+    @ViewBuilder private var lobbyGrid: some View {
+        if lobby.sounds.isEmpty {
+            ContentUnavailableView {
+                Label(lobby.phase == .open ? "Noch keine Sounds" : "Verbinde …", systemImage: "person.2")
+            } description: {
+                Text(lobby.phase == .open ? "\(lobby.hostName) hat noch keine Sounds freigegeben." : "Einen Moment.")
+            }
+        } else if visibleLobby.isEmpty {
+            ContentUnavailableView.search(text: query)
+        } else {
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+                    ForEach(visibleLobby) { sound in
+                        Tile(sound: Sound(url: URL(fileURLWithPath: sound.name)),
+                             progress: sound.local.flatMap { player.progress[$0.id] }) {
+                            tapCount += 1
+                            lobby.play(sound)
+                        }
+                        .opacity(sound.local == nil ? 0.5 : 1)
+                        .overlay(alignment: .topTrailing) { if sound.local == nil { ProgressView().padding(10) } }
+                        .contextMenu {
+                            Button("Abspielen", systemImage: "play") { lobby.play(sound) }
+                            Button("Behalten …", systemImage: "square.and.arrow.down") { lobby.ask(sound) }
+                        }
+                    }
+                }
+                .padding(16)
+            }
+            .background(Color(.systemGroupedBackground))
+        }
+    }
+
+    private var requestTitle: String {
+        guard let r = lobby.requests.first else { return "" }
+        return r.kind == .asked ? "\(r.by) möchte „\(r.soundTitle)“ behalten" : "\(r.by) schenkt dir „\(r.soundTitle)“"
+    }
+
+    private var requestShown: Binding<Bool> {
+        Binding(get: { !lobby.requests.isEmpty }, set: { _ in })
+    }
+
+    private var lobbyProblemShown: Binding<Bool> {
+        Binding(get: { lobby.problem != nil && !showLobby }, set: { if !$0 { lobby.problem = nil } })
     }
 
     private var deleteShown: Binding<Bool> {

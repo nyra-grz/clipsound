@@ -31,14 +31,45 @@ final class SoundLibrary: ObservableObject {
         return folder
     }()
 
+    /// Sounds liegen sichtbar auf dem Schreibtisch unter „Sounds“
+    static let desktopFolder: URL = FileManager.default.urls(for: .desktopDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Sounds", isDirectory: true)
+
+    /// Hier liegen Einstellungen wie keybinds.json (nicht im Sound-Ordner)
+    let settingsFolder: URL
+
     init(folder: URL? = nil) {
         if let folder {
             self.folder = folder
+            settingsFolder = folder.deletingLastPathComponent()
         } else {
-            self.folder = Self.supportFolder.appendingPathComponent("Sounds", isDirectory: true)
+            self.folder = Self.desktopFolder
+            settingsFolder = Self.supportFolder
         }
         try? FileManager.default.createDirectory(at: self.folder, withIntermediateDirectories: true)
+        if folder == nil { Self.moveOldSounds(to: self.folder) }
         reload()
+    }
+
+    /// Bis 1.3 lagen die Sounds in ~/Library/Application Support/ClipSound/Sounds. Sie werden verschoben,
+    /// nie gelöscht: Gleicher Name mit gleichem Inhalt bleibt als Kopie im alten Ordner,
+    /// gleicher Name mit anderem Inhalt kommt als „Name (2)“ dazu.
+    private static func moveOldSounds(to dest: URL) {
+        let fm = FileManager.default
+        let old = supportFolder.appendingPathComponent("Sounds", isDirectory: true)
+        guard let files = try? fm.contentsOfDirectory(at: old, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else { return }
+        for file in files where audioExtensions.contains(file.pathExtension.lowercased()) {
+            var target = dest.appendingPathComponent(file.lastPathComponent)
+            if fm.fileExists(atPath: target.path) {
+                if fm.contentsEqual(atPath: file.path, andPath: target.path) { continue }
+                let base = file.deletingPathExtension().lastPathComponent, ext = file.pathExtension
+                var i = 2
+                repeat { target = dest.appendingPathComponent("\(base) (\(i)).\(ext)"); i += 1 } while fm.fileExists(atPath: target.path)
+            }
+            try? fm.moveItem(at: file, to: target)
+        }
+        // leeren alten Ordner wegräumen (nur wenn wirklich nichts mehr drin ist)
+        if (try? fm.contentsOfDirectory(atPath: old.path))?.isEmpty == true { try? fm.removeItem(at: old) }
     }
 
     func reload() {

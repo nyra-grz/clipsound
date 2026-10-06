@@ -17,6 +17,8 @@ targets:
       - path: ClipSound
       # gleiche Audio-Engine wie die Mac-App (bis 500 %)
       - path: ../macos/Sources/ClipSound/SoundPlayer.swift
+      # Lobby (zusammen abspielen) – gleicher Code wie am Mac
+      - path: ../macos/Sources/ClipSound/Lobby.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 // Startargumente (zum Testen):
 //   --library <ordner>   anderen Sound-Ordner benutzen
@@ -10,6 +11,12 @@ import AppKit
 //   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
 //   --update-now         verfügbares Update ohne Nachfrage installieren
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
+//   --lobby-host         Lobby mit den eigenen Sounds öffnen, Code und Ereignisse ausgeben
+//   --lobby-join <code>  Lobby beitreten, Ereignisse ausgeben
+//   --lobby-accept       Anfragen/Angebote automatisch annehmen
+//   --lobby-play-first   als Gast den ersten Sound drücken und danach behalten wollen
+//   --lobby-exit-after <s> nach s Sekunden beenden
+//   Server ändern: Umgebungsvariable CLIPSOUND_SERVER
 enum LaunchArgs {
     static let args = ProcessInfo.processInfo.arguments
     static func value(_ name: String) -> String? {
@@ -20,7 +27,13 @@ enum LaunchArgs {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var board: Board?
+    /// wird schon in ClipSoundApp.init gesetzt – onAppear kommt manchmal erst spät
+    static var sharedBoard: Board?
+    var board: Board? {
+        get { storedBoard ?? Self.sharedBoard }
+        set { storedBoard = newValue }
+    }
+    private var storedBoard: Board?
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -49,6 +62,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let board = self.board, let first = board.library.sounds.first { board.startRecording(first) }
             }
         }
+        if LaunchArgs.args.contains("--lobby-host") || LaunchArgs.value("--lobby-join") != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.runLobbyTest() }
+        }
+        if let secs = LaunchArgs.value("--lobby-exit-after").flatMap(Double.init) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + secs) {
+                print("LOBBY: ende bibliothek=\(self.board?.library.sounds.count ?? -1)"); fflush(stdout); exit(0)
+            }
+        }
         if LaunchArgs.args.contains("--selftest") {
             // warten, bis das Fenster steht und der Delegate das Board kennt
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runSelftest() }
@@ -56,6 +77,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        board?.lobby.leave() // Lobby sauber verlassen, fremde Sounds aus dem Cache räumen
+    }
 
     /// Ganzes Fenster inkl. Titelleiste und Toolbar als PNG
     private static func snapshot(to path: String) {
@@ -85,6 +110,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private var lobbyWatch: AnyCancellable?
+    private var lastLobbyState = ""
+    private var playedFirst = false
+
+    private func runLobbyTest() {
+        // warten, bis das Fenster steht und der Delegate das Board kennt
+        guard let board, NSApp.windows.contains(where: { $0.isVisible }) else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.runLobbyTest() }
+            return
+        }
+        let lobby = board.lobby
+        func out(_ s: String) { print("LOBBY: \(s)"); fflush(stdout) }
+        let play = lobby.onPlay
+        lobby.onPlay = { sound, delay in out("play \(sound.url.lastPathComponent) in \(Int(delay * 1000)) ms"); play?(sound, delay) }
+        let receive = lobby.onReceive
+        lobby.onReceive = { url in out("bekommen \(url.lastPathComponent)"); receive?(url) }
+        lobbyWatch = lobby.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let ready = lobby.sounds.filter { $0.local != nil }.count
+                let state = "phase=\(lobby.phase) code=\(lobby.code) host=\(lobby.isHost) sounds=\(ready)/\(lobby.sounds.count) " +
+                    "hochgeladen=\(lobby.uploaded.map { "\($0.done)/\($0.total)" } ?? "-") leute=\(lobby.members.map(\.name)) " +
+                    "note=\(lobby.note ?? "-") problem=\(lobby.problem ?? "-")"
+                if state != self.lastLobbyState { self.lastLobbyState = state; out(state) }
+                if LaunchArgs.args.contains("--lobby-accept"), let r = lobby.requests.first {
+                    out("anfrage \(r.kind) \(r.soundName) von \(r.by) → ja")
+                    lobby.answer(r, ok: true)
+                }
+                if LaunchArgs.args.contains("--lobby-play-first"), !self.playedFirst, lobby.phase == .open,
+                   !lobby.sounds.isEmpty, ready == lobby.sounds.count, let first = lobby.sounds.first {
+                    self.playedFirst = true
+                    board.play(first)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { lobby.ask(first) }
+                }
+            }
+        }
+        if let code = LaunchArgs.value("--lobby-join") { lobby.join(code) } else { lobby.open(with: board.library.sounds) }
+    }
+
     private func runSelftest() {
         guard let board, let sound = board.library.sounds.first else { print("SELFTEST: keine Sounds"); exit(1) }
         let oldVolume = board.player.volume
@@ -111,6 +175,7 @@ struct ClipSoundApp: App {
 
     init() {
         let board = Board(library: SoundLibrary(folder: LaunchArgs.library))
+        AppDelegate.sharedBoard = board
         _board = StateObject(wrappedValue: board)
     }
 
@@ -143,7 +208,7 @@ struct ClipSoundApp: App {
                     .keyboardShortcut("f")
             }
             CommandMenu("Wiedergabe") {
-                PlaybackCommands(player: board.player)
+                PlaybackCommands(board: board, player: board.player)
             }
         }
     }
@@ -151,10 +216,11 @@ struct ClipSoundApp: App {
 
 /// Menü „Wiedergabe“ – eigene View, damit Häkchen und Zustand live aktualisiert werden
 struct PlaybackCommands: View {
+    let board: Board
     @ObservedObject var player: SoundPlayer
 
     var body: some View {
-        Button("Alles stoppen") { player.stopAll() }
+        Button("Alles stoppen") { board.stopAll() }
             .keyboardShortcut(".")
         Toggle("Sounds überlappen", isOn: $player.overlap)
             .keyboardShortcut("l")

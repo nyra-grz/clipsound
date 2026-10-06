@@ -1,0 +1,17 @@
+{
+  "name": "clipsound-rooms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ClipSound Räume: gemeinsame Soundboards in Echtzeit",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "pg": "^8.23.1",
+    "ws": "^8.22.0"
+  }
+}
