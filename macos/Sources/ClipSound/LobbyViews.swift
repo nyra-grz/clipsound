@@ -83,6 +83,7 @@ struct LobbySheet: View {
     @ObservedObject var library: SoundLibrary
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
+    @State private var showVolumes = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -174,7 +175,8 @@ struct LobbySheet: View {
                 Text(lobby.code)
                     .font(.system(size: 40, weight: .semibold, design: .monospaced))
                     .kerning(6)
-                    .textSelection(.enabled)
+                    .onTapGesture(count: 3) { showVolumes = true } // versteckt
+                    .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
                 if lobby.phase != .open {
                     ProgressView().controlSize(.small)
                 }
@@ -206,8 +208,8 @@ struct LobbySheet: View {
     }
 }
 
-/// Versteckt: dreimal auf den Lobby-Code klicken. Der Host stellt hier die echten Lautsprecher
-/// jedes Geräts ein, alle anderen nur ihre eigenen.
+/// Versteckt: dreimal auf den Lobby-Code klicken. Jeder stellt hier die echten Lautsprecher
+/// jedes Geräts ein.
 struct VolumeMixer: View {
     @ObservedObject var lobby: Lobby
 
@@ -217,9 +219,7 @@ struct VolumeMixer: View {
             ForEach(lobby.members) { member in
                 VolumeRow(lobby: lobby, member: member)
             }
-            Text(lobby.isHost
-                 ? "Stellt die echten Lautsprecher ein. Die anderen sehen eine Meldung, wenn du ihre änderst."
-                 : "Nur der Host kann die anderen einstellen.")
+            Text("Stellt die echten Lautsprecher ein.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -236,7 +236,7 @@ private struct VolumeRow: View {
     @State private var editing = false
 
     private var isMe: Bool { member.id == lobby.me }
-    private var canEdit: Bool { member.volume != nil && (isMe || lobby.isHost) }
+    private var canEdit: Bool { member.volume != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {

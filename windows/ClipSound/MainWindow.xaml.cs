@@ -483,6 +483,7 @@ public partial class MainWindow : Window
             if (key == Key.Enter && _tiles.Count > 0) { Play(_tiles[0]); e.Handled = true; }
             return;
         }
+        if (Keyboard.FocusedElement is TextBox) return; // z. B. Lobby-Code: Zahlen sollen ins Feld, nicht Sounds starten
         if (IsModifier(key)) return;
 
         var id = _keys.SoundFor(key, mods);
@@ -618,6 +619,7 @@ public partial class MainWindow : Window
         if (e.ClickCount != 3) return;
         _volumeRowIds = "";
         UpdateVolumeRows();
+        VolumePopup.PlacementTarget = (UIElement)sender;
         VolumePopup.IsOpen = true;
         e.Handled = true;
     }
@@ -655,7 +657,7 @@ public partial class MainWindow : Window
                 else
                 {
                     var slider = new Slider { Minimum = 0, Maximum = 1, SmallChange = 0.02, LargeChange = 0.1, IsMoveToPointEnabled = true,
-                                              IsEnabled = me || _lobby.IsHost, Value = m.Volume.Value };
+                                              Value = m.Volume.Value };
                     var member = m;
                     slider.ValueChanged += (_, e) =>
                     {
@@ -675,9 +677,7 @@ public partial class MainWindow : Window
                 }
                 VolumeRows.Children.Add(row);
             }
-            VolumeHint.Text = _lobby.IsHost
-                ? "Stellt die echten Lautsprecher ein. Die anderen sehen eine Meldung, wenn du ihre änderst."
-                : "Nur der Host kann die anderen einstellen.";
+            VolumeHint.Text = "Stellt die echten Lautsprecher ein.";
             return;
         }
         foreach (var m in _lobby.Members)

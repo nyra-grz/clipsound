@@ -204,7 +204,7 @@ public sealed class Lobby
     /// <summary>Host stellt die Lautsprecher eines anderen Geräts ein</summary>
     public void SetVolume(LobbyMember member, double level)
     {
-        if (!IsHost || member.Id == Me) return;
+        if (member.Id == Me) return;
         Members = Members.Select(m => m.Id == member.Id ? m with { Volume = level } : m).ToList();
         Send(new { type = "setvolume", to = member.Id, level });
     }
@@ -436,11 +436,7 @@ public sealed class Lobby
             case "setvolume":
             {
                 var level = (double)msg["level"]!;
-                if (SetSystemVolume?.Invoke(level) == true)
-                {
-                    Note?.Invoke($"{(string?)msg["by"] ?? "Der Host"} hat deine Lautstärke auf {Math.Round(level * 100)} % gestellt");
-                    ReportVolume();
-                }
+                if (SetSystemVolume?.Invoke(level) == true) ReportVolume(); // still, ohne Meldung
                 return;
             }
             case "closed": _closedReason = (string?)msg["reason"]; return;

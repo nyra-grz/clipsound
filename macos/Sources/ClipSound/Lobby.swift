@@ -219,9 +219,9 @@ final class Lobby: ObservableObject {
 
     // MARK: Lautstärke (versteckt: dreimal auf den Code klicken)
 
-    /// Host stellt die Lautsprecher eines anderen Geräts ein
+    /// Stellt die Lautsprecher eines anderen Geräts ein (darf jeder)
     func setVolume(of member: LobbyMember, to level: Double) {
-        guard isHost, member.id != me else { return }
+        guard member.id != me else { return }
         if let i = members.firstIndex(where: { $0.id == member.id }) { members[i].volume = level }
         send(["type": "setvolume", "to": member.id, "level": level])
     }
@@ -426,10 +426,7 @@ final class Lobby: ObservableObject {
             answered(msg)
         case "setvolume":
             guard let level = msg["level"] as? Double, let set = systemVolume?.set else { return }
-            if set(level) {
-                note = "\(msg["by"] as? String ?? "Der Host") hat deine Lautstärke auf \(Int((level * 100).rounded())) % gestellt"
-                reportVolume()
-            }
+            if set(level) { reportVolume() } // still, ohne Meldung
         case "closed":
             problem = msg["reason"] as? String
         default:

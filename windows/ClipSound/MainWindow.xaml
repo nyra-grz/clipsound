@@ -384,7 +384,8 @@
                             <StackPanel>
                                 <TextBlock x:Name="LobbyInsideTitle" HorizontalAlignment="Center" Foreground="{DynamicResource TextFillColorSecondaryBrush}"/>
                                 <TextBlock x:Name="LobbyBigCode" HorizontalAlignment="Center" FontSize="40" FontWeight="SemiBold"
-                                           FontFamily="Cascadia Mono, Consolas" Margin="0,4,0,8"/>
+                                           FontFamily="Cascadia Mono, Consolas" Margin="0,4,0,8"
+                                           Background="Transparent" MouseLeftButtonDown="LobbyCode_MouseDown"/>
                                 <Button Content="Code kopieren" HorizontalAlignment="Center" Click="LobbyCopy_Click"/>
                             </StackPanel>
                         </Border>

@@ -20,10 +20,10 @@
 //            offered {req, id, name, by}          (an einen Gast: Host bietet einen Sound an)
 //            answered {req, id, name, ok, kind}   (an beide: Ergebnis; kind = ask | offer)
 //            closed {reason}                      (Lobby ist zu, danach Close 4410)
-//            setvolume {level, by}               (an ein Gerät: der Host stellt die Lautstärke ein, 0…1)
+//            setvolume {level, by}               (an ein Gerät: jemand stellt die Lautstärke ein, 0…1)
 //   Client → play {id}, stop {}, ping {t}, ask {id}, offer {id, to}, answer {req, ok},
 //            volume {level, system}  (eigene Lautstärke melden; system = echte Lautsprecher, sonst nur App)
-//            setvolume {to, level}   (nur Host)
+//            setvolume {to, level}   (jeder bei jedem)
 //   Close-Codes: 4404 Lobby gibt's nicht, 4401 falscher Host-Token, 4409 voll, 4410 geschlossen, 4429 zu viele Versuche
 const http = require('http');
 const fs = require('fs');
@@ -357,7 +357,7 @@ async function onMessage(ws, code, raw) {
   }
   if (msg.type === 'stop') return broadcast(code, { type: 'stop', by: ws.name, from: ws.id });
 
-  // Lautstärke: jedes Gerät meldet seine, nur der Host darf sie bei anderen ändern
+  // Lautstärke: jedes Gerät meldet seine, jeder darf sie bei den anderen ändern
   if (msg.type === 'volume' && typeof msg.level === 'number') {
     const level = Math.round(Math.min(1, Math.max(0, msg.level)) * 100) / 100;
     if (level === ws.volume && !!msg.system === ws.volumeSystem) return;
@@ -366,7 +366,7 @@ async function onMessage(ws, code, raw) {
     ws.volumeTimer = setTimeout(() => broadcast(code, { type: 'members', members: members(code) }), 150);
     return;
   }
-  if (msg.type === 'setvolume' && ws.isHost && typeof msg.level === 'number') {
+  if (msg.type === 'setvolume' && typeof msg.level === 'number') {
     const target = findMember(code, msg.to);
     if (!target || target === ws) return;
     return sendTo(target, { type: 'setvolume', level: Math.min(1, Math.max(0, msg.level)), by: ws.name });

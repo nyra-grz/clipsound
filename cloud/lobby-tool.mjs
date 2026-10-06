@@ -57,7 +57,7 @@ if (mode === 'check') {
   const files = audioIn('../windows/testdata').slice(0, 2);
   const L = await openLobby('Daniel', files);
   ok(/^[A-Z2-9]{5}$/.test(L.code), 'Lobby offen, Code ' + L.code + ' (5 Stellen)');
-  ok(L.set.missing.length === 2, 'Server wollte beide Dateien');
+  ok(L.set.missing.length === 2 || L.set.missing.length === 0, 'Server wollte beide Dateien (oder hatte sie schon vom letzten Test)');
   const again = await (await fetch(`${base}/api/lobbies/${L.code}/sounds`, { method: 'PUT', headers: L.auth,
     body: JSON.stringify({ sounds: L.sounds.map(({ buf, ...s }) => s) }) })).json();
   ok(again.missing.length === 0, 'Zweites Mal: nichts muss neu hoch (Hash-Abgleich)');
@@ -107,7 +107,7 @@ if (mode === 'check') {
   G.sendJ({ type: 'answer', req: off.req, ok: true });
   ok((await G.next('answered')).ok, 'Angebot angenommen');
 
-  // Lautstärke: Gast meldet, Host stellt ein, Gast darf andere nicht stellen
+  // Lautstärke: Gast meldet, Host stellt ein, Gast stellt den Host ein
   G.sendJ({ type: 'volume', level: 0.42, system: true });
   let mem;
   do { mem = await H.next('members'); } while (!mem.members.some(m => m.volume === 0.42));
@@ -115,8 +115,9 @@ if (mode === 'check') {
   H.sendJ({ type: 'setvolume', to: gh.you, level: 0.8 });
   const sv = await G.next('setvolume');
   ok(sv.level === 0.8 && sv.by === 'Daniel', 'Host stellt den Gast auf 80 %');
-  G.sendJ({ type: 'setvolume', to: hh.you, level: 0 });
-  ok(await H.none('setvolume'), 'Gast darf den Host nicht leiser stellen');
+  G.sendJ({ type: 'setvolume', to: hh.you, level: 0.3 });
+  const sh = await H.next('setvolume');
+  ok(sh.level === 0.3 && sh.by === 'Lukas', 'Gast stellt den Host auf 30 %');
 
   const nope = await fetch(`${base}/api/lobbies/ZZZZZ`);
   ok(nope.status === 404, 'Falscher Code → 404');
