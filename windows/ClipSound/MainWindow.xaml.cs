@@ -19,6 +19,8 @@ namespace ClipSound;
 //   --size <B>x<H>       Fenstergröße (z. B. 700x600)
 //   --recorder           Aufnahmefenster für den ersten Sound öffnen
 //   --snapshot <png>     Fenster als Bild speichern und beenden
+//   --settings           Einstellungen öffnen (mit --snapshot: davon das Bild)
+//   --icon <bild>        eigenes App-Icon setzen (wie in den Einstellungen)
 //   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
 //   --update-now         verfügbares Update ohne Nachfrage installieren
 //   --selftest <txt>     Tastenkürzel und Wiedergabe prüfen, Bericht schreiben und beenden
@@ -98,7 +100,7 @@ public partial class MainWindow : Window
         Closing += (_, e) =>
         {
             // Fenster zu heißt nicht beenden: die Tastenkürzel sollen weiter überall gehen
-            if (!Quitting && !TestMode && _tray is not null)
+            if (!Quitting && !TestMode && _tray is not null && _settings.KeepInTray)
             {
                 e.Cancel = true;
                 Hide();
@@ -116,6 +118,8 @@ public partial class MainWindow : Window
             _tray?.Dispose();
         };
         if (!TestMode) SetUpTray();
+        if (Arg("--icon") is { } icon) CustomIcon.Set(icon);
+        ApplyIcon();
 
         Render();
     }
@@ -471,6 +475,7 @@ public partial class MainWindow : Window
 
         if (mods == ModifierKeys.Control && key == Key.F) { Search.Focus(); Search.SelectAll(); e.Handled = true; return; }
         if (mods == ModifierKeys.Control && key == Key.O) { ImportFiles_Click(this, e); e.Handled = true; return; }
+        if (mods == ModifierKeys.Control && key == Key.OemComma) { OpenSettings(); e.Handled = true; return; }
         if (key == Key.Escape)
         {
             StopAll();
@@ -712,11 +717,36 @@ public partial class MainWindow : Window
                 ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip(),
             };
             _tray.ContextMenuStrip.Items.Add("ClipSound öffnen", null, (_, _) => ShowFromTray());
+            _tray.ContextMenuStrip.Items.Add("Einstellungen …", null, (_, _) => { ShowFromTray(); OpenSettings(); });
             _tray.ContextMenuStrip.Items.Add("Beenden", null, (_, _) => { Quitting = true; Close(); });
             _tray.DoubleClick += (_, _) => ShowFromTray();
         }
         catch { _tray = null; } // ohne Symbol wird beim Schließen einfach beendet
     }
+
+    private System.Drawing.Icon? _defaultTrayIcon;
+
+    /// <summary>Eigenes Icon (oder wieder das Standard-Icon) für Fenster, Taskleiste und Infobereich</summary>
+    private void ApplyIcon()
+    {
+        var custom = CustomIcon.Load();
+        Icon = custom ?? BitmapFrame.Create(new Uri("pack://application:,,,/AppIcon.ico"));
+        if (_tray is null) return;
+        _defaultTrayIcon ??= _tray.Icon;
+        _tray.Icon = CustomIcon.TrayIcon() ?? _defaultTrayIcon;
+    }
+
+    private SettingsWindow? _settingsWindow;
+
+    private void OpenSettings()
+    {
+        if (_settingsWindow is not null) { _settingsWindow.Activate(); return; }
+        _settingsWindow = new SettingsWindow(_settings, ApplyIcon) { Owner = this };
+        _settingsWindow.Closed += (_, _) => { _settingsWindow = null; Keyboard.Focus(this); };
+        _settingsWindow.Show();
+    }
+
+    private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
     private void ShowFromTray()
     {
@@ -840,6 +870,7 @@ public partial class MainWindow : Window
         RunLobbyAndHotkeyTests();
         var snapshot = Arg("--snapshot");
         var selftest = Arg("--selftest");
+        if (HasArg("--settings")) OpenSettings();
         if (snapshot is null && selftest is null && !HasArg("--recorder")) return;
 
         var steps = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
@@ -849,7 +880,7 @@ public partial class MainWindow : Window
             if (HasArg("--recorder") && _tiles.Count > 0) StartRecording(_tiles[0]);
             Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () =>
             {
-                if (snapshot is not null) SaveSnapshot(snapshot);
+                if (snapshot is not null) SaveSnapshot(snapshot, (Window?)_settingsWindow ?? this);
                 if (selftest is not null) WriteSelftest(selftest);
                 if (snapshot is not null || selftest is not null) Close();
             });
@@ -857,16 +888,16 @@ public partial class MainWindow : Window
         steps.Start();
     }
 
-    private void SaveSnapshot(string path)
+    private static void SaveSnapshot(string path, Window window)
     {
-        UpdateLayout();
-        var root = (FrameworkElement)Content;
+        window.UpdateLayout();
+        var root = (FrameworkElement)window.Content;
         int w = (int)root.ActualWidth, h = (int)root.ActualHeight;
         var visual = new DrawingVisual();
         using (var dc = visual.RenderOpen())
         {
             // Mica ist im Bild durchsichtig – darum mit der Fenster-Grundfarbe hinterlegen
-            var bg = TryFindResource("SolidBackgroundFillColorBaseBrush") as Brush ?? Brushes.White;
+            var bg = window.TryFindResource("SolidBackgroundFillColorBaseBrush") as Brush ?? Brushes.White;
             dc.DrawRectangle(bg, null, new Rect(0, 0, w, h));
             dc.DrawRectangle(new VisualBrush(root), null, new Rect(0, 0, w, h));
         }
@@ -934,6 +965,8 @@ public sealed class Settings
     public bool Overlap { get; set; }
     public string? LobbyName { get; set; }
     public bool TrayHintShown { get; set; }
+    /// <summary>X = nur Fenster zu, weiter im Infobereich (sonst beenden)</summary>
+    public bool KeepInTray { get; set; } = true;
 
     private static string FilePath => Path.Combine(SoundLibrary.SupportFolder, "settings.json");
 

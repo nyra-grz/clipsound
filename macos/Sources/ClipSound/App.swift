@@ -10,7 +10,10 @@ import Combine
 //   --recorder           Aufnahme-Fenster für den ersten Sound öffnen (für Screenshots)
 //   --pretend-version <v> so tun, als wäre Version <v> installiert (Updater testen)
 //   --update-now         verfügbares Update ohne Nachfrage installieren
-//   --mixer-demo         drei Sounds gleichzeitig starten, einen auf 160 %, einen ausblenden (für Screenshots)
+//   --mixer-demo         drei Sounds gleichzeitig starten, einen auf 160 %, einen ausblenden, den ersten zurückdrehen (für Screenshots)
+//   --open-settings      Einstellungen gleich öffnen
+//   --close-test         Hauptfenster nach 1 s wie mit dem roten Knopf schließen, Zustand ausgeben
+//   --icon <bild>        eigenes App-Icon setzen (wie in den Einstellungen)
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
 //   --lobby-host         Lobby mit den eigenen Sounds öffnen, Code und Ereignisse ausgeben
 //   --lobby-join <code>  Lobby beitreten, Ereignisse ausgeben
@@ -39,6 +42,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var keyMonitor: Any?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        watchMainWindow()
+        if LaunchArgs.args.contains("--close-test") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                NSApp.windows.first { $0.identifier?.rawValue == "main" }?.performClose(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    print("CLOSE: läuft noch, dock=\(NSApp.activationPolicy() == .regular) fenster=\(NSApp.windows.filter { $0.isVisible && $0.identifier?.rawValue == "main" }.count)"); fflush(stdout)
+                }
+            }
+        }
+        CustomIcon.shared.apply()
+        if let path = LaunchArgs.value("--icon") { CustomIcon.shared.set(from: URL(fileURLWithPath: path)) }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // Dialoge (z. B. „Importieren“) bekommen ihre Tasten selbst
             guard let board = self?.board, !(event.window is NSPanel) else { return event }
@@ -79,8 +93,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 player.overlap = true
                 for sound in sounds.prefix(3) { _ = player.play(sound) }
                 player.overlap = overlap
-                if player.channels.count > 1 { player.setLevel(1.6, for: player.channels[1].id) }
+                if player.channels.count > 1 {
+                    // nur für das Bild – danach wieder auf den gemerkten Wert
+                    let soundID = player.channels[1].soundID, old = player.level(of: soundID)
+                    player.setLevel(1.6, for: soundID)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { player.setLevel(old, for: soundID) }
+                }
                 if player.channels.count > 2 { player.fadeOut(player.channels[2].id) }
+                if let first = player.channels.first {
+                    player.beginScratch(first.id)
+                    for i in 1...10 {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4 + Double(i) * 0.05) {
+                            player.scratch(first.id, by: i <= 5 ? 0.12 : -0.08)
+                            if i == 10 { player.endScratch(first.id); print("MIXER: scratch fertig, pos=\(player.channels.first?.position ?? -1)"); fflush(stdout) }
+                        }
+                    }
+                }
                 print("MIXER: kanäle=\(player.channels.map { "\($0.title) \(Int($0.level * 100))%" })"); fflush(stdout)
             }
         }
@@ -90,8 +118,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Fenster zu heißt nicht beenden: die Tastenkürzel sollen weiter überall gehen (beenden mit ⌘Q)
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    /// Fenster zu: je nach Einstellung beenden oder in der Menüleiste weiterlaufen (Kürzel gehen weiter)
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !AppSettings.keepInMenuBar }
+
+    private var windowObservers: [Any] = []
+
+    /// Hauptfenster zu → aus dem Dock verschwinden, nur noch das Symbol in der Menüleiste; wieder auf → zurück ins Dock
+    private func watchMainWindow() {
+        let center = NotificationCenter.default
+        windowObservers.append(center.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { note in
+            guard (note.object as? NSWindow)?.identifier?.rawValue == "main" else { return }
+            if AppSettings.keepInMenuBar { NSApp.setActivationPolicy(.accessory) } else { NSApp.terminate(nil) }
+        })
+        windowObservers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { note in
+            guard (note.object as? NSWindow)?.identifier?.rawValue == "main", NSApp.activationPolicy() != .regular else { return }
+            NSApp.setActivationPolicy(.regular)
+        })
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         board?.lobby.leave() // Lobby sauber verlassen, fremde Sounds aus dem Cache räumen
@@ -99,7 +142,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Ganzes Fenster inkl. Titelleiste und Toolbar als PNG
     private static func snapshot(to path: String) {
-        guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) else {
+        print("SNAPSHOT: fenster \(NSApp.windows.map { "\($0.identifier?.rawValue ?? "-") \(type(of: $0)) '\($0.title)' \(Int($0.frame.width))x\(Int($0.frame.height)) visible=\($0.isVisible)" }) policy=\(NSApp.activationPolicy().rawValue)")
+        // mit --settings das Einstellungsfenster, sonst das Hauptfenster
+        let wantSettings = LaunchArgs.args.contains("--open-settings")
+        guard let window = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) && $0.frame.width > 200 && ($0.identifier?.rawValue == "main") != wantSettings }) else {
             print("SNAPSHOT: kein Fenster – \(NSApp.windows.map { "\(type(of: $0)) visible=\($0.isVisible)" })"); return
         }
         guard let frameView = window.contentView?.superview,
@@ -199,6 +245,7 @@ struct ClipSoundApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var board: Board
     @StateObject private var updater = Updater()
+    @AppStorage(AppSettings.keepInMenuBarKey) private var keepInMenuBar = true
 
     init() {
         let board = Board(library: SoundLibrary(folder: LaunchArgs.library))
@@ -211,6 +258,7 @@ struct ClipSoundApp: App {
             ContentView(board: board, updater: updater)
                 .frame(minWidth: 720, minHeight: 560)
                 .onAppear { delegate.board = board }
+                .background(SettingsOnLaunch())
                 .task {
                     // Beim Start nach Updates schauen (nicht bei Testläufen)
                     let testRun = ["--snapshot", "--selftest", "--keytest", "--import"].contains(where: LaunchArgs.args.contains)
@@ -220,7 +268,12 @@ struct ClipSoundApp: App {
                 }
         }
         .defaultSize(width: 980, height: 640)
+        .restorationBehavior(.disabled) // immer mit Fenster starten, auch wenn es beim Beenden zu war
         .commands {
+            CommandGroup(after: .windowList) {
+                OpenMainWindowButton(title: "ClipSound-Fenster")
+                    .keyboardShortcut("1")
+            }
             CommandGroup(after: .appInfo) {
                 Button("Nach Updates suchen …") { Task { await updater.check(userInitiated: true) } }
             }
@@ -237,6 +290,45 @@ struct ClipSoundApp: App {
             CommandMenu("Wiedergabe") {
                 PlaybackCommands(board: board, player: board.player)
             }
+        }
+
+        Settings {
+            SettingsView()
+        }
+
+        MenuBarExtra("ClipSound", systemImage: "speaker.wave.2.fill", isInserted: $keepInMenuBar) {
+            OpenMainWindowButton(title: "ClipSound öffnen")
+            Button("Alles stoppen") { board.stopAll() }
+            Divider()
+            SettingsLink { Text("Einstellungen …") }
+            Divider()
+            Button("ClipSound beenden") { NSApp.terminate(nil) }
+                .keyboardShortcut("q")
+        }
+    }
+}
+
+/// --open-settings: Einstellungen gleich nach dem Start öffnen (zum Testen)
+private struct SettingsOnLaunch: View {
+    @Environment(\.openSettings) private var openSettings
+    var body: some View {
+        Color.clear.task {
+            guard LaunchArgs.args.contains("--open-settings") else { return }
+            try? await Task.sleep(for: .seconds(1))
+            openSettings()
+        }
+    }
+}
+
+struct OpenMainWindowButton: View {
+    let title: String
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button(title) {
+            NSApp.setActivationPolicy(.regular)
+            openWindow(id: "main")
+            NSApp.activate()
         }
     }
 }

@@ -167,12 +167,17 @@
             <TextBlock x:Name="CountText" Grid.Column="1" Text="" Margin="16,0" VerticalAlignment="Center" HorizontalAlignment="Right"
                        Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
 
-            <!-- Suche -->
-            <Grid Grid.Column="2" Width="240" VerticalAlignment="Center">
-                <TextBox x:Name="Search" TextChanged="Search_TextChanged" VerticalContentAlignment="Center"/>
-                <TextBlock x:Name="SearchPlaceholder" Text="Suchen (Strg+F)" Margin="12,0,0,0" VerticalAlignment="Center"
-                           IsHitTestVisible="False" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
-            </Grid>
+            <!-- Suche + Einstellungen -->
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <Grid Width="200" VerticalAlignment="Center">
+                    <TextBox x:Name="Search" TextChanged="Search_TextChanged" VerticalContentAlignment="Center"/>
+                    <TextBlock x:Name="SearchPlaceholder" Text="Suchen (Strg+F)" Margin="12,0,0,0" VerticalAlignment="Center"
+                               IsHitTestVisible="False" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                </Grid>
+                <Button Click="Settings_Click" Margin="8,0,0,0" ToolTip="Einstellungen (Strg+,)" VerticalAlignment="Stretch">
+                    <TextBlock Text="&#xE713;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center"/>
+                </Button>
+            </StackPanel>
         </Grid>
 
         <!-- Update verfügbar -->

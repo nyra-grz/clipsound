@@ -66,6 +66,9 @@ jobs:
           Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
           Run @('--library', "$pwd\testlib\Sounds", '--pretend-version', '1.0', '--snapshot', "$pwd\shots\5-update.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--settings', '--snapshot', "$pwd\shots\7-einstellungen.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--icon', "$pwd\shots\4-leer.png", '--settings', '--snapshot', "$pwd\shots\8-eigenes-icon.png")
+          Remove-Item "$env:APPDATA\ClipSound\AppIcon.png" -ErrorAction SilentlyContinue
           Get-ChildItem shots
           Get-ChildItem shots -Filter *.txt | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }
 
