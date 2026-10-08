@@ -46,9 +46,12 @@ struct MixerView: View {
                         ForEach(player.channels) { channel in
                             ChannelStrip(channel: channel,
                                          level: Binding(get: { channel.level },
-                                                        set: { player.setLevel($0, for: channel.id) }),
+                                                        set: { player.setLevel($0, for: channel.soundID) }),
                                          onFade: { player.fadeOut(channel.id) },
-                                         onStop: { player.stop(channel.id) })
+                                         onStop: { player.stop(channel.id) },
+                                         onScratchBegin: { player.beginScratch(channel.id) },
+                                         onScratch: { player.scratch(channel.id, by: $0) },
+                                         onScratchEnd: { player.endScratch(channel.id) })
                         }
                     }
                     .frame(maxHeight: .infinity)
@@ -148,10 +151,16 @@ private struct ChannelStrip: View {
     @Binding var level: Double
     let onFade: () -> Void
     let onStop: () -> Void
+    let onScratchBegin: () -> Void
+    let onScratch: (Double) -> Void
+    let onScratchEnd: () -> Void
 
     var body: some View {
         let tint = PadView.tint(for: channel.soundID)
         VStack(spacing: 6) {
+            Turntable(position: channel.position, tint: tint,
+                      onBegin: onScratchBegin, onTurn: onScratch, onEnd: onScratchEnd)
+                .frame(width: 68, height: 68)
             Fader(value: $level, range: 0...SoundPlayer.maxChannelLevel, mark: 1, reset: 1, tint: tint)
             PercentLabel(value: channel.level)
             ProgressView(value: channel.progress)
@@ -178,6 +187,71 @@ private struct ChannelStrip: View {
         .frame(width: 84)
         .background(.quinary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .opacity(channel.fadingOut ? 0.6 : 1)
+    }
+}
+
+/// Plattenteller: dreht sich mit dem Sound, mit der Maus vor- und zurückdrehen (Scratchen)
+private struct Turntable: View {
+    let position: Double
+    let tint: Color
+    let onBegin: () -> Void
+    let onTurn: (Double) -> Void
+    let onEnd: () -> Void
+
+    @State private var lastAngle: Double?
+
+    var body: some View {
+        GeometryReader { geo in
+            let size: CGFloat = min(geo.size.width, geo.size.height)
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            record(size: size)
+                .position(center)
+                .gesture(scratchGesture(center: center))
+        }
+        .help("Drehen zum Vor- und Zurückspulen")
+        .accessibilityLabel("Plattenteller")
+    }
+
+    private func record(size: CGFloat) -> some View {
+        let disc = Color(white: 0.12)
+        let degrees: Double = position / SoundPlayer.secondsPerTurn * 360
+        return ZStack {
+            Circle().fill(disc)
+            ForEach(1..<5) { (i: Int) in
+                Circle()
+                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 1)
+                    .padding(size * 0.05 * CGFloat(i))
+            }
+            Circle().fill(tint).frame(width: size * 0.36, height: size * 0.36)
+            Circle().fill(disc).frame(width: size * 0.06, height: size * 0.06)
+            // Markierung, damit man das Drehen sieht
+            Capsule()
+                .fill(Color.white.opacity(0.85))
+                .frame(width: 2, height: size * 0.3)
+                .offset(y: -size * 0.3)
+        }
+        .frame(width: size, height: size)
+        .rotationEffect(.degrees(degrees))
+        .contentShape(Circle())
+    }
+
+    private func scratchGesture(center: CGPoint) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { drag in
+                let angle = Double(atan2(drag.location.y - center.y, drag.location.x - center.x))
+                if let lastAngle {
+                    var delta = angle - lastAngle
+                    if delta > .pi { delta -= 2 * .pi } else if delta < -.pi { delta += 2 * .pi }
+                    onTurn(delta / (2 * .pi) * SoundPlayer.secondsPerTurn)
+                } else {
+                    onBegin()
+                }
+                lastAngle = angle
+            }
+            .onEnded { _ in
+                lastAngle = nil
+                onEnd()
+            }
     }
 }
 
