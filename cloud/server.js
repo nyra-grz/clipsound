@@ -162,8 +162,9 @@ async function soundIn(code, id) {
 
 /** Dateien löschen, die keine Lobby mehr braucht */
 async function sweepBlobs() {
-  const { rows } = await db.query('SELECT DISTINCT id FROM lobby_sounds');
-  const used = new Set(rows.map(r => r.id));
+  const lob = await db.query('SELECT DISTINCT id FROM lobby_sounds');
+  const cl = await db.query('SELECT DISTINCT id FROM clan_sounds'); // Clan-Dateien nicht wegräumen
+  const used = new Set([...lob.rows, ...cl.rows].map(r => r.id));
   for (const f of await fs.promises.readdir(BLOB_DIR)) {
     if (used.has(f.replace(/\.part$/, ''))) continue;
     const st = await fs.promises.stat(path.join(BLOB_DIR, f)).catch(() => null);
@@ -174,6 +175,7 @@ async function sweepBlobs() {
 
 async function closeLobby(code, reason) {
   await db.query('DELETE FROM lobbies WHERE code = $1', [code]);
+  await db.query('DELETE FROM clan_sessions WHERE code = $1', [code]); // falls das eine Clan-Session war
   hostAway.delete(code);
   const set = lobbies.get(code);
   if (set) {
@@ -257,6 +259,112 @@ async function putBlob(req, res, lobby, id) {
   broadcastSounds(lobby.code);
 }
 
+// ---------- Clan-Sounds & Clan-Session (nutzen dieselbe Blob-Infrastruktur) ----------
+async function clanSoundsOf(clanId) {
+  const { rows } = await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId]);
+  return rows.filter(r => fs.existsSync(path.join(BLOB_DIR, r.id)));
+}
+
+/** Lobby-Soundliste einer laufenden Clan-Session auf die Clan-Bibliothek bringen. */
+async function syncSessionSounds(code, clanId) {
+  const snd = await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId]);
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM lobby_sounds WHERE code = $1', [code]);
+    for (const [pos, s] of snd.rows.entries())
+      await client.query('INSERT INTO lobby_sounds (code, id, name, size, pos) VALUES ($1,$2,$3,$4,$5)', [code, s.id, s.name, s.size, pos]);
+    await client.query('COMMIT');
+  } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
+  broadcastSounds(code);
+}
+
+/** true = hier beantwortet. Deckt /api/clans/:id/sounds | /session | /blobs/:id ab. */
+async function clanMedia(req, res, p) {
+  const m = /^\/api\/clans\/([0-9a-f]{32})\/(sounds|session|blobs\/[0-9a-f]{64})$/.exec(p);
+  if (!m) return false;
+  const clanId = m[1], tail = m[2];
+  const me = await clans.authUser(db, req);
+  if (!me) { json(res, 401, { error: 'Nicht eingeloggt' }); return true; }
+  if (!await clans.memberRole(db, clanId, me.id)) { json(res, 403, { error: 'Du bist nicht in diesem Clan' }); return true; }
+
+  if (tail === 'sounds' && req.method === 'GET') {
+    json(res, 200, { sounds: await clanSoundsOf(clanId) });
+    return true;
+  }
+
+  if (tail === 'sounds' && req.method === 'POST') {
+    let body;
+    try { body = JSON.parse(String(await readBody(req, 256 * 1024)) || '{}'); }
+    catch (e) { if (e.status) throw e; json(res, 400, { error: 'Ungültige Liste' }); return true; }
+    const cur = (await db.query('SELECT id, size FROM clan_sounds WHERE clan_id = $1', [clanId])).rows;
+    const maxpos = (await db.query('SELECT COALESCE(MAX(pos), -1) AS m FROM clan_sounds WHERE clan_id = $1', [clanId])).rows[0].m;
+    const existing = new Set(cur.map(r => r.id));
+    let total = cur.reduce((a, r) => a + r.size, 0), count = cur.length, pos = maxpos + 1;
+    const added = [], skipped = [];
+    for (const s of Array.isArray(body.sounds) ? body.sounds : []) {
+      const name = cleanFileName(s.name), size = Math.floor(Number(s.size));
+      if (!isId(s.id) || !name) { skipped.push(String(s.name)); continue; }
+      if (existing.has(s.id)) continue;
+      if (!(size > 0 && size <= MAX_FILE) || total + size > MAX_LOBBY || count >= MAX_SOUNDS) { skipped.push(String(s.name)); continue; }
+      await db.query('INSERT INTO clan_sounds (clan_id, id, name, size, pos, added_by) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
+        [clanId, s.id, name, size, pos++, me.id]);
+      existing.add(s.id); total += size; count++;
+      added.push({ id: s.id, name, size });
+    }
+    const missing = added.filter(s => !fs.existsSync(path.join(BLOB_DIR, s.id))).map(s => s.id);
+    json(res, 200, { added: added.length, missing, skipped });
+    const sess = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
+    if (sess && await getLobby(sess.code)) await syncSessionSounds(sess.code, clanId);
+    return true;
+  }
+
+  if (tail.startsWith('blobs/')) {
+    const id = tail.slice(6);
+    const row = (await db.query('SELECT name FROM clan_sounds WHERE clan_id = $1 AND id = $2', [clanId, id])).rows[0];
+    if (req.method === 'PUT') {
+      if (!row) { json(res, 404, { error: 'Sound steht nicht in der Clan-Liste' }); return true; }
+      const buf = await readBody(req, MAX_FILE);
+      if (crypto.createHash('sha256').update(buf).digest('hex') !== id) { json(res, 400, { error: 'Prüfsumme stimmt nicht' }); return true; }
+      if (!looksLikeAudio(buf)) { json(res, 415, { error: 'Das ist keine Audio-Datei' }); return true; }
+      const file = path.join(BLOB_DIR, id);
+      if (!fs.existsSync(file)) { await fs.promises.writeFile(file + '.part', buf); await fs.promises.rename(file + '.part', file); }
+      json(res, 200, { ok: true });
+      const sess = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
+      if (sess && await getLobby(sess.code)) broadcastSounds(sess.code);
+      return true;
+    }
+    if (!row) { json(res, 404, { error: 'Nicht gefunden' }); return true; }
+    serveFile(req, res, path.join(BLOB_DIR, id), AUDIO_TYPES[path.extname(row.name).toLowerCase()],
+      { 'Cache-Control': 'public, max-age=31536000, immutable' });
+    return true;
+  }
+
+  if (tail === 'session' && req.method === 'POST') {
+    const open = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
+    if (open && await getLobby(open.code)) { json(res, 200, { code: open.code, host: false }); return true; }
+    await db.query('DELETE FROM clan_sessions WHERE clan_id = $1', [clanId]); // verwaiste Session aufräumen
+    const token = crypto.randomBytes(24).toString('base64url');
+    let code = '';
+    for (let i = 0; i < 10; i++) {
+      const c = newCode();
+      const r = await db.query('INSERT INTO lobbies (code, host_token, host_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [c, hashToken(token), me.name || 'Clan']);
+      if (r.rowCount) { code = c; break; }
+    }
+    if (!code) { json(res, 503, { error: 'Kein Code frei' }); return true; }
+    const snd = (await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId])).rows;
+    for (const [pos, s] of snd.entries())
+      await db.query('INSERT INTO lobby_sounds (code, id, name, size, pos) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [code, s.id, s.name, s.size, pos]);
+    await db.query('INSERT INTO clan_sessions (clan_id, code) VALUES ($1,$2) ON CONFLICT (clan_id) DO UPDATE SET code = $2, created_at = now()', [clanId, code]);
+    hostAway.set(code, Date.now());
+    json(res, 200, { code, hostToken: token, host: true });
+    return true;
+  }
+
+  json(res, 404, { error: 'Nicht gefunden' });
+  return true;
+}
+
 async function route(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
@@ -316,6 +424,7 @@ async function route(req, res) {
   }
 
   if (p.startsWith('/api/account') || p.startsWith('/api/clans')) {
+    if (await clanMedia(req, res, p)) return; // Clan-Sounds/Session (brauchen die Blob-Infrastruktur)
     await clans.handle(req, res, { db, readBody, json });
     return;
   }

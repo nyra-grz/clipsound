@@ -111,9 +111,32 @@ async function migrate(db) {
       name    text NOT NULL,
       size    integer NOT NULL,
       pos     integer NOT NULL,
+      added_by text,
       PRIMARY KEY (clan_id, id)
     );
+    ALTER TABLE clan_sounds ADD COLUMN IF NOT EXISTS added_by text;
+    CREATE TABLE IF NOT EXISTS clan_sessions (
+      clan_id    text PRIMARY KEY REFERENCES clans(id) ON DELETE CASCADE,
+      code       text NOT NULL,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
   `);
+}
+
+/** Nutzer aus dem Bearer-Token, oder null. */
+async function authUser(db, req) {
+  const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+  if (!m) return null;
+  const { rows } = await db.query(
+    'SELECT u.id, u.email, u.name, u.verified FROM account_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1',
+    [hashToken(m[1])]);
+  return rows[0] || null;
+}
+
+/** Rolle im Clan ('admin'|'member') oder null, wenn nicht Mitglied. */
+async function memberRole(db, clanId, userId) {
+  const { rows } = await db.query('SELECT role FROM clan_members WHERE clan_id = $1 AND user_id = $2', [clanId, userId]);
+  return rows[0]?.role || null;
 }
 
 /** true = Request wurde hier beantwortet. ctx: {db, readBody, json} */
@@ -124,18 +147,8 @@ async function handle(req, res, ctx) {
   if (!p.startsWith('/api/account') && !p.startsWith('/api/clans')) return false;
 
   const body = async () => { try { return JSON.parse(String(await readBody(req, 64 * 1024)) || '{}'); } catch { return {}; } };
-  const user = async () => {
-    const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-    if (!m) return null;
-    const { rows } = await db.query(
-      'SELECT u.id, u.email, u.name, u.verified FROM account_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1',
-      [hashToken(m[1])]);
-    return rows[0] || null;
-  };
-  const role = async (clanId, userId) => {
-    const { rows } = await db.query('SELECT role FROM clan_members WHERE clan_id = $1 AND user_id = $2', [clanId, userId]);
-    return rows[0]?.role || null;
-  };
+  const user = () => authUser(db, req);
+  const role = (clanId, userId) => memberRole(db, clanId, userId);
   const clanView = async (clanId) => {
     const { rows } = await db.query('SELECT id, name, invite_code, owner_id FROM clans WHERE id = $1', [clanId]);
     return rows[0] || null;
@@ -258,6 +271,7 @@ async function handle(req, res, ctx) {
           'SELECT u.id, u.name, m.role FROM clan_members m JOIN users u ON u.id = m.user_id WHERE m.clan_id = $1 ORDER BY m.role, u.name',
           [clanId])).rows;
         const out = { clan: { id: clan.id, name: clan.name, role: myRole, owner: clan.owner_id === me.id }, members };
+        out.clan.session = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0]?.code || null;
         if (isAdmin) {
           out.clan.inviteCode = clan.invite_code;
           out.requests = (await db.query(
@@ -324,4 +338,4 @@ async function myClans(db, userId) {
   return rows;
 }
 
-module.exports = { migrate, handle };
+module.exports = { migrate, handle, authUser, memberRole };
