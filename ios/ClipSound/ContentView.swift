@@ -121,6 +121,7 @@ struct ContentView: View {
             Button("OK") {}
         } message: { Text($0) }
         .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
+        .onAppear { if ProcessInfo.processInfo.arguments.contains("--open-account") { showAccount = true } }
     }
 
     private var grid: some View {
