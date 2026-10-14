@@ -6,7 +6,6 @@ struct ContentView: View {
     @ObservedObject var player: SoundPlayer
     @ObservedObject var lobby: Lobby
     @State private var showLobby = false
-    @State private var showMixer = false
 
     @State private var query = ""
     @State private var importing = false
@@ -104,7 +103,6 @@ struct ContentView: View {
             Button("OK") {}
         } message: { Text($0) }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: lobby, library: library) }
-        .sheet(isPresented: $showMixer) { MixerView(player: player) }
         .alert(requestTitle, isPresented: requestShown, presenting: lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { lobby.answer(request, ok: false) }
@@ -145,15 +143,9 @@ struct ContentView: View {
     /// Lautstärke und Überlappen unten
     private var controls: some View {
         HStack(spacing: 12) {
-            Button {
-                showMixer = true
-            } label: {
-                Image(systemName: "slider.vertical.3")
-                    .foregroundStyle(player.channels.isEmpty ? Color.secondary : Color.accentColor)
-                    .frame(width: 24)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Mischpult")
+            Image(systemName: "speaker.wave.2.fill", variableValue: min(player.volume, 1))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
             Slider(value: $player.volume, in: 0...SoundPlayer.maxVolume)
             Text(player.volume, format: .percent.precision(.fractionLength(0)))
                 .monospacedDigit()

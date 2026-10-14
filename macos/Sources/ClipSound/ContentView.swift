@@ -215,16 +215,9 @@ struct ContentView: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            VStack(spacing: 0) {
-                soundArea
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
-                Divider()
-                MixerView(player: player)
-                    .frame(height: geo.size.height / 2)
-            }
-        }
+        soundArea
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
         .safeAreaInset(edge: .top, spacing: 0) {
             VStack(spacing: 0) {
                 updateBar
