@@ -1,9 +1,7 @@
 import SwiftUI
 import AppKit
 
-
-// MARK: - Seite
-
+/// Clan-Seite – übersichtlich in Karten statt Formular.
 struct ClanPage: View {
     @StateObject private var room: ClanRoom
 
@@ -12,82 +10,100 @@ struct ClanPage: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                LabeledContent("Rolle", value: room.isAdmin ? "Admin" : "Mitglied")
-                Button {
-                    Task { await room.startSession() }
-                } label: {
-                    Label(room.sessionCode == nil ? "Clan-Session starten" : "Session beitreten (\(room.sessionCode!))",
-                          systemImage: "play.circle.fill")
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Kopf
+                HStack(spacing: 14) {
+                    Image(systemName: room.isAdmin ? "crown.fill" : "person.3.fill")
+                        .font(.system(size: 34))
+                        .foregroundStyle(room.isAdmin ? Color.orange : Color.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(room.name).font(.title2.weight(.bold))
+                        Badge(text: room.isAdmin ? "Admin" : "Mitglied", color: room.isAdmin ? .orange : .secondary)
+                    }
+                    Spacer()
                 }
-                .disabled(room.busy)
-                if room.lobby.active {
-                    Button("Session verlassen", role: .destructive) { room.lobby.leave() }
-                }
-            } header: {
-                Text(room.name)
-            } footer: {
-                Text("Alle im Clan können der Session beitreten und gemeinsam abspielen. Ist niemand mehr drin, startet die nächste Session neu.")
-            }
 
-            if !room.requests.isEmpty && room.isAdmin {
-                Section("Beitritts-Anfragen") {
-                    ForEach(room.requests) { r in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(r.name)
-                                Text(r.email).font(.caption).foregroundStyle(.secondary)
+                // Session
+                VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        Task { await room.startSession() }
+                    } label: {
+                        Label(room.sessionCode == nil ? "Clan-Session starten" : "Session beitreten (\(room.sessionCode!))",
+                              systemImage: "play.circle.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent).controlSize(.large)
+                    .disabled(room.busy)
+                    if room.lobby.active {
+                        Button("Session verlassen", role: .destructive) { room.lobby.leave() }.controlSize(.small)
+                    }
+                    Text("Alle im Clan können beitreten und zusammen abspielen. Ist niemand mehr drin, startet die nächste Session neu.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .clanCard()
+
+                // Anfragen (Admin)
+                if room.isAdmin && !room.requests.isEmpty {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Beitritts-Anfragen").font(.headline)
+                        ForEach(room.requests) { r in
+                            HStack(spacing: 10) {
+                                Avatar(name: r.name, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(r.name).font(.subheadline.weight(.medium))
+                                    Text(r.email).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Annehmen") { Task { await room.approve(r.userId, ok: true) } }
+                                    .buttonStyle(.borderedProminent).controlSize(.small)
+                                Button("Ablehnen") { Task { await room.approve(r.userId, ok: false) } }.controlSize(.small)
                             }
-                            Spacer()
-                            Button("Annehmen") { Task { await room.approve(r.userId, ok: true) } }
-                            Button("Ablehnen") { Task { await room.approve(r.userId, ok: false) } }
-                                .foregroundStyle(.secondary)
                         }
                     }
+                    .clanCard()
                 }
-            }
 
-            Section("Clan-Sounds (\(room.sounds.count))") {
-                if room.sounds.isEmpty {
-                    Text("Noch keine Sounds im Clan. Lade welche aus deiner Bibliothek hoch.")
-                        .foregroundStyle(.secondary)
-                }
-                ForEach(room.sounds) { s in
+                // Clan-Sounds
+                VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Image(systemName: "waveform").foregroundStyle(.secondary)
-                        Text(s.title)
+                        Text("Clan-Sounds").font(.headline)
                         Spacer()
-                        Button {
-                            Task { await room.takeToSolo(s) }
-                        } label: {
-                            Image(systemName: "square.and.arrow.down")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("In deine eigenen Sounds übernehmen")
+                        Text("\(room.sounds.count)").foregroundStyle(.secondary).monospacedDigit()
                     }
+                    if room.sounds.isEmpty {
+                        Text("Noch keine Sounds im Clan. Lade welche aus deiner Bibliothek hoch.").foregroundStyle(.secondary)
+                    }
+                    ForEach(room.sounds) { s in
+                        HStack(spacing: 10) {
+                            Image(systemName: "waveform").foregroundStyle(.secondary)
+                            Text(s.title)
+                            Spacer()
+                            Button { Task { await room.takeToSolo(s) } } label: { Image(systemName: "square.and.arrow.down") }
+                                .buttonStyle(.borderless).help("In deine eigenen Sounds übernehmen")
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    Button { Task { await room.upload(pickSounds()) } } label: {
+                        Label("Sounds in den Clan laden…", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(room.busy)
+                    .padding(.top, 2)
                 }
-                Button {
-                    Task { await room.upload(pickSounds()) }
-                } label: {
-                    Label("Sounds in den Clan laden…", systemImage: "square.and.arrow.up")
-                }
-                .disabled(room.busy)
+                .clanCard()
+
+                MembersCard(room: room)
+                if room.isAdmin { AdminInviteCard(room: room) }
+
+                if room.busy { ProgressView().controlSize(.small) }
+                if let n = room.note { Text(n).font(.callout).foregroundStyle(.secondary) }
             }
-
-            Members(room: room)
-
-            if room.isAdmin { AdminInvite(room: room) }
-
-            if room.busy { Section { ProgressView() } }
-            if let n = room.note { Section { Text(n).foregroundStyle(.secondary) } }
+            .padding(24)
         }
-        .formStyle(.grouped)
         .navigationTitle(room.name)
         .task { await room.load() }
     }
 
-    /// Audio-Dateien auswählen (zum Hochladen in den Clan).
     private func pickSounds() -> [Sound] {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
@@ -99,44 +115,54 @@ struct ClanPage: View {
     }
 }
 
-/// Mitglieder-Liste, standardmäßig eingeklappt (versteckt wie Admin-Kram).
-private struct Members: View {
+/// Mitglieder – aufklappbar.
+private struct MembersCard: View {
     @ObservedObject var room: ClanRoom
     @State private var show = false
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            Button { withAnimation { show.toggle() } } label: {
+                HStack {
+                    Text("Mitglieder (\(room.members.count))").font(.headline)
+                    Spacer()
+                    Image(systemName: show ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
             if show {
                 ForEach(room.members) { m in
-                    Label {
+                    HStack(spacing: 10) {
+                        Avatar(name: m.name, size: 26)
                         Text(m.name)
-                    } icon: {
-                        Image(systemName: m.role == "admin" ? "crown" : "person")
+                        Spacer()
+                        if m.role == "admin" { Badge(text: "Admin", color: .orange) }
                     }
                 }
             }
-        } header: {
-            Button(show ? "Mitglieder ausblenden" : "Mitglieder zeigen (\(room.members.count))") { show.toggle() }
-                .buttonStyle(.plain).font(.caption).foregroundStyle(.secondary)
         }
+        .clanCard()
     }
 }
 
-/// Invite-Code – versteckt, erscheint erst nach 3× Klick auf die Überschrift (wie die System-Lautstärke).
-private struct AdminInvite: View {
+/// Invite-Code versteckt – 3× auf „Admin“ tippen (wie die System-Lautstärke).
+private struct AdminInviteCard: View {
     @ObservedObject var room: ClanRoom
     @State private var show = false
     var body: some View {
-        Section {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Admin").font(.headline)
+                .onTapGesture(count: 3) { withAnimation { show.toggle() } }
             if show {
-                LabeledContent("Invite-Code", value: room.inviteCode ?? "–")
-                    .textSelection(.enabled)
-                Button("Neuen Code erzeugen") { Task { await room.rotateInvite() } }
+                HStack {
+                    Text("Invite-Code").foregroundStyle(.secondary)
+                    Spacer()
+                    Text(room.inviteCode ?? "–").font(.title3.monospaced()).textSelection(.enabled)
+                }
+                Button("Neuen Code erzeugen") { Task { await room.rotateInvite() } }.controlSize(.small)
+            } else {
+                Text("3× auf „Admin“ tippen für den Invite-Code.").font(.caption).foregroundStyle(.tertiary)
             }
-        } header: {
-            Text("Admin")
-                .onTapGesture(count: 3) { withAnimation { show.toggle() } } // versteckt: 3× tippen
-        } footer: {
-            if !show { Text("3× auf „Admin“ tippen für den Invite-Code.").font(.caption2) }
         }
+        .clanCard()
     }
 }
