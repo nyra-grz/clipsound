@@ -1,5 +1,7 @@
 import SwiftUI
 import UIKit
+import AVFoundation
+import MediaPlayer
 
 /// Leiste oben, solange man in einer Lobby ist
 struct LobbyBar: View {
@@ -184,6 +186,15 @@ struct LobbySheet: View {
                 }
             }
         }
+        Section {
+            ForEach(lobby.members) { member in
+                DeviceVolumeRow(lobby: lobby, member: member)
+            }
+        } header: {
+            Text("Geräte-Lautstärke")
+        } footer: {
+            Text("Stellt die echten Lautsprecher der Geräte ein. Dein iPhone regelst du mit dem eigenen Regler oder den Lautstärke-Tasten.")
+        }
         if lobby.isHost {
             Section {
                 EmptyView()
@@ -195,4 +206,62 @@ struct LobbySheet: View {
             Button("Lobby verlassen", role: .destructive) { lobby.leave() }
         }
     }
+}
+
+/// Eine Zeile pro Gerät: regelt die echten Lautsprecher dieses Geräts.
+/// Für andere Geräte (Mac/Web) ein Schieberegler, der die Lautstärke dort setzt;
+/// fürs eigene iPhone der echte System-Regler, weil iOS die Systemlautstärke nicht per App setzen lässt.
+private struct DeviceVolumeRow: View {
+    @ObservedObject var lobby: Lobby
+    let member: LobbyMember
+    @State private var value: Double = 0
+    @State private var editing = false
+
+    private var isMe: Bool { member.id == lobby.me }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(member.name + (isMe ? " (du)" : ""), systemImage: member.host ? "crown" : "person")
+                Spacer()
+                Text(member.volume == nil ? "–" : "\(Int((value * 100).rounded())) %")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            if isMe {
+                SystemVolumeSlider().frame(height: 30)
+            } else if member.volume != nil {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.fill").font(.caption).foregroundStyle(.secondary)
+                    Slider(value: $value, in: 0...1) { editing = $0 }
+                    Image(systemName: "speaker.wave.3.fill").font(.caption).foregroundStyle(.secondary)
+                }
+                if member.system == false {
+                    Text("Nur die App – im Browser geht es nicht anders.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Dieses Gerät meldet keine Lautstärke.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .onAppear { value = member.volume ?? 0 }
+        .onChange(of: member.volume) { _, new in if !editing, let new { value = new } }
+        .onChange(of: value) { _, new in
+            guard editing, !isMe else { return }
+            lobby.setVolume(of: member, to: new)
+        }
+    }
+}
+
+/// Der echte System-Lautstärke-Regler des iPhones (MPVolumeView). Zeigt im Simulator keinen
+/// Regler, auf dem Gerät schon.
+struct SystemVolumeSlider: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let v = MPVolumeView(frame: .zero)
+        v.showsRouteButton = false
+        v.tintColor = UIColor(Color.accentColor)
+        return v
+    }
+    func updateUIView(_ uiView: MPVolumeView, context: Context) {}
 }

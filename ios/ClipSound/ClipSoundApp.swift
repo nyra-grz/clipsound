@@ -34,6 +34,10 @@ struct ClipSoundApp: App {
             let r = library.importItems([url])
             if r.added == 0 { lobby.note = "Konnte nicht gespeichert werden." }
         }
+        // iOS meldet die eigene System-Lautstärke (nur lesen – setzen lässt iOS nicht per App zu,
+        // das macht der System-Regler/die Lautstärke-Tasten). Andere Geräte kann man trotzdem regeln.
+        lobby.systemVolume = (get: { Double(AVAudioSession.sharedInstance().outputVolume) },
+                              set: { _ in false })
         // Testen im Simulator: --lobby-join CODE bzw. --lobby-host
         let args = ProcessInfo.processInfo.arguments
         if let i = args.firstIndex(of: "--lobby-join"), i + 1 < args.count {
