@@ -3,21 +3,32 @@ import SwiftUI
 /// Konto-Fenster: nicht eingeloggt → Anmelden/Registrieren/Bestätigen; eingeloggt → Clans.
 struct AccountSheet: View {
     @ObservedObject var account: Account
+    let lobby: Lobby
+    let library: SoundLibrary
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(account.loggedIn ? "Dein Konto & Clans" : "Anmelden").font(.headline)
-                Spacer()
-                Button("Fertig") { dismiss() }
+        Group {
+            if account.loggedIn {
+                NavigationStack {
+                    AccountHome(account: account, lobby: lobby, library: library)
+                        .navigationTitle("Konto & Clans")
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
+                }
+            } else {
+                VStack(spacing: 0) {
+                    HStack {
+                        Text("Anmelden").font(.headline)
+                        Spacer()
+                        Button("Fertig") { dismiss() }
+                    }
+                    .padding(12)
+                    Divider()
+                    AccountAuth(account: account)
+                }
             }
-            .padding(12)
-            Divider()
-            if account.loggedIn { AccountHome(account: account) }
-            else { AccountAuth(account: account) }
         }
-        .frame(width: 440, height: 500)
+        .frame(width: 480, height: 580)
     }
 }
 
@@ -86,6 +97,8 @@ private struct AccountAuth: View {
 
 private struct AccountHome: View {
     @ObservedObject var account: Account
+    let lobby: Lobby
+    let library: SoundLibrary
     @State private var newClan = ""
     @State private var joinCode = ""
     @State private var note: String?
@@ -106,13 +119,15 @@ private struct AccountHome: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(account.clans) { c in
-                    HStack(spacing: 8) {
-                        Image(systemName: c.isAdmin ? "crown.fill" : "person.3.fill")
-                            .foregroundStyle(c.isAdmin ? Color.orange : Color.secondary)
-                        Text(c.name)
-                        Spacer()
-                        Text("\(c.members) \(c.members == 1 ? "Mitglied" : "Mitglieder")")
-                            .font(.caption).foregroundStyle(.secondary)
+                    NavigationLink(value: c) {
+                        HStack(spacing: 8) {
+                            Image(systemName: c.isAdmin ? "crown.fill" : "person.3.fill")
+                                .foregroundStyle(c.isAdmin ? Color.orange : Color.secondary)
+                            Text(c.name)
+                            Spacer()
+                            Text("\(c.members) \(c.members == 1 ? "Mitglied" : "Mitglieder")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
@@ -153,6 +168,9 @@ private struct AccountHome: View {
             }
         }
         .formStyle(.grouped)
+        .navigationDestination(for: ClanSummary.self) { c in
+            ClanPage(account: account, lobby: lobby, library: library, clan: c)
+        }
         .task { await account.refreshMe() }
     }
 }

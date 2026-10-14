@@ -13,7 +13,7 @@ struct AccountUser: Equatable {
 /// Server-Fehler mit lesbarer Meldung.
 struct Fail: Error { let message: String }
 
-struct ClanSummary: Identifiable, Equatable {
+struct ClanSummary: Identifiable, Equatable, Hashable {
     let id: String
     let name: String
     let role: String        // "admin" | "member"

@@ -161,6 +161,18 @@ final class Lobby: ObservableObject {
         connect()
     }
 
+    /// Clan-Session: zu einem bereits bestehenden Code verbinden (die Lobby wurde serverseitig
+    /// schon mit den Clan-Sounds angelegt). Mit hostToken = als Host, ohne = als Gast.
+    func joinSession(code: String, hostToken: String?) {
+        guard phase == .off else { return }
+        problem = nil
+        self.code = code
+        self.isHost = hostToken != nil
+        self.hostToken = hostToken
+        phase = .connecting
+        connect()
+    }
+
     func leave() {
         let wasHost = isHost
         phase = .off
