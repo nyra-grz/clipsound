@@ -205,6 +205,8 @@ struct ContentView: View {
     @State private var updateDismissed = false
     @State private var pendingDelete: Sound?
     @State private var showLobby = false
+    @State private var showAccount = false
+    @StateObject private var account = Account()
 
     init(board: Board, updater: Updater) {
         self.board = board
@@ -225,6 +227,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: board.lobby, library: library) }
+        .sheet(isPresented: $showAccount) { AccountSheet(account: account) }
         .alert(requestTitle, isPresented: requestShown, presenting: board.lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { board.lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { board.lobby.answer(request, ok: false) }
@@ -347,6 +350,12 @@ struct ContentView: View {
                 Label("Lobby", systemImage: board.lobby.active ? "person.2.fill" : "person.2")
             }
             .help("Zusammen abspielen: Lobby öffnen oder mit Code beitreten")
+        }
+        ToolbarItem(placement: .navigation) {
+            Button { showAccount = true } label: {
+                Label("Konto & Clans", systemImage: account.loggedIn ? "person.crop.circle.fill" : "person.crop.circle")
+            }
+            .help(account.loggedIn ? "Konto und Clans" : "Anmelden für Clans")
         }
     }
 
