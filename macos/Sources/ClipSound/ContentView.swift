@@ -540,11 +540,12 @@ struct VolumeControl: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 18)
                 .contentShape(Rectangle())
-                .onTapGesture(count: 3) { if lobby.active { showVolumes = true } } // versteckt: Regler aller Geräte
-                .popover(isPresented: $showVolumes, arrowEdge: .bottom) { VolumeMixer(lobby: lobby) }
+                .onTapGesture(count: 3) { showVolumes = true } // 3× tippen: System-Lautstärke (in der Lobby alle Geräte)
+                .popover(isPresented: $showVolumes, arrowEdge: .bottom) {
+                    if lobby.active { VolumeMixer(lobby: lobby) } else { SystemVolumePopover() }
+                }
                 .onChange(of: lobby.active) { _, active in
                     if active && LaunchArgs.args.contains("--lobby-volumes") { showVolumes = true }
-                    if !active { showVolumes = false }
                 }
             Slider(value: $volume, in: 0...SoundPlayer.maxVolume)
                 .controlSize(.small)
@@ -553,9 +554,51 @@ struct VolumeControl: View {
                 .monospacedDigit()
                 .foregroundStyle(volume > 1 ? Color.orange : Color.secondary)
                 .frame(width: 42, alignment: .trailing)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 3) { showVolumes = true } // auch hier: 3× → System-Lautstärke
         }
         .padding(.horizontal, 4)
         .help(volume > 1 ? "Verstärkt – über 100 % kann es übersteuern" : "Lautstärke")
+    }
+}
+
+/// 3× auf das Lautsprecher-Symbol (ohne Lobby): die echte Lautstärke dieses Macs –
+/// nicht die App-Lautstärke. In einer Lobby übernimmt stattdessen der VolumeMixer.
+struct SystemVolumePopover: View {
+    @State private var value: Double = 0
+    @State private var available = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("System-Lautstärke").font(.headline)
+            if available {
+                HStack(spacing: 8) {
+                    Image(systemName: "speaker.fill").foregroundStyle(.secondary).font(.caption)
+                    Slider(value: $value, in: 0...1)
+                        .controlSize(.small)
+                    Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).font(.caption)
+                    Text("\(Int((value * 100).rounded())) %")
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 42, alignment: .trailing)
+                }
+                Text("Stellt die echten Lautsprecher dieses Macs ein – nicht die App-Lautstärke.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Dieses Ausgabegerät meldet keine Lautstärke (z. B. manche HDMI-Ausgänge).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(16)
+        .frame(width: 300)
+        .onAppear {
+            if let v = SystemVolume.get() { value = v; available = true } else { available = false }
+        }
+        .onChange(of: value) { _, new in SystemVolume.set(new) }
     }
 }
 
