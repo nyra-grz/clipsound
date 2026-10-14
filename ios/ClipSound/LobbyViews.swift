@@ -81,6 +81,8 @@ struct LobbySheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var code = ""
     @FocusState private var codeFocused: Bool
+    /// Versteckt: 3× auf den Lobby-Code tippen, um die Geräte-Lautstärke zu zeigen
+    @State private var showVolumes = false
 
     var body: some View {
         NavigationStack {
@@ -162,11 +164,12 @@ struct LobbySheet: View {
                 Text(lobby.code)
                     .font(.system(size: 44, weight: .semibold, design: .monospaced))
                     .kerning(6)
-                    .textSelection(.enabled)
                 if lobby.phase != .open { ProgressView() }
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 8)
+            .contentShape(Rectangle())
+            .onTapGesture(count: 3) { withAnimation { showVolumes.toggle() } } // versteckt: Geräte-Lautstärke
             ShareLink(item: "Komm in meine ClipSound-Lobby: \(lobby.code)") {
                 Label("Code teilen", systemImage: "square.and.arrow.up")
             }
@@ -186,14 +189,16 @@ struct LobbySheet: View {
                 }
             }
         }
-        Section {
-            ForEach(lobby.members) { member in
-                DeviceVolumeRow(lobby: lobby, member: member)
+        if showVolumes {
+            Section {
+                ForEach(lobby.members) { member in
+                    DeviceVolumeRow(lobby: lobby, member: member)
+                }
+            } header: {
+                Text("Geräte-Lautstärke")
+            } footer: {
+                Text("Versteckt – 3× auf den Code tippen blendet das aus. Stellt die echten Lautsprecher der Geräte ein; dein iPhone über den eigenen Regler.")
             }
-        } header: {
-            Text("Geräte-Lautstärke")
-        } footer: {
-            Text("Stellt die echten Lautsprecher der Geräte ein. Dein iPhone regelst du mit dem eigenen Regler oder den Lautstärke-Tasten.")
         }
         if lobby.isHost {
             Section {
