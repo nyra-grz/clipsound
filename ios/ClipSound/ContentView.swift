@@ -6,6 +6,8 @@ struct ContentView: View {
     @ObservedObject var player: SoundPlayer
     @ObservedObject var lobby: Lobby
     @State private var showLobby = false
+    @State private var showAccount = false
+    @StateObject private var account = Account()
 
     @State private var query = ""
     @State private var importing = false
@@ -72,6 +74,9 @@ struct ContentView: View {
                     Button("Lobby", systemImage: lobby.active ? "person.2.fill" : "person.2") { showLobby = true }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
+                    Button("Clans", systemImage: account.loggedIn ? "person.crop.circle.fill" : "person.crop.circle") { showAccount = true }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("Importieren", systemImage: "plus") { importing = true }
                 }
             }
@@ -103,6 +108,7 @@ struct ContentView: View {
             Button("OK") {}
         } message: { Text($0) }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: lobby, library: library) }
+        .sheet(isPresented: $showAccount) { AccountSheet(account: account, lobby: lobby, library: library) }
         .alert(requestTitle, isPresented: requestShown, presenting: lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { lobby.answer(request, ok: false) }

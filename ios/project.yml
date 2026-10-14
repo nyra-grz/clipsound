@@ -19,6 +19,8 @@ targets:
       - path: ../macos/Sources/ClipSound/SoundPlayer.swift
       # Lobby (zusammen abspielen) – gleicher Code wie am Mac
       - path: ../macos/Sources/ClipSound/Lobby.swift
+      # Konto & Clans – gleiches Modell wie am Mac
+      - path: ../macos/Sources/ClipSound/Account.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound
