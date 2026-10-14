@@ -137,6 +137,17 @@ public sealed class Lobby
         Connect();
     }
 
+    /// <summary>Clan-Session: zu einem bereits bestehenden Code verbinden (serverseitig schon mit den
+    /// Clan-Sounds angelegt). Mit hostToken = als Host, ohne = als Gast.</summary>
+    public void JoinSession(string code, string? hostToken, string name)
+    {
+        if (Active) return;
+        _name = name;
+        Code = code; IsHost = hostToken is not null; _hostToken = hostToken;
+        Phase = LobbyPhase.Connecting; Notify();
+        Connect();
+    }
+
     public void Leave()
     {
         bool wasHost = IsHost;

@@ -39,6 +39,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _progressTimer;
     private GlobalHotKeys? _hotKeys;
     private readonly Lobby _lobby = new();
+    private readonly Account _account;
     private readonly DispatcherTimer _toastTimer;
     private System.Windows.Forms.NotifyIcon? _tray;
     /// <summary>Wirklich beenden (Menü „Beenden“ oder Update) statt in den Infobereich</summary>
@@ -58,6 +59,7 @@ public partial class MainWindow : Window
 
         _library = new SoundLibrary(Arg("--library"));
         _keys = new KeyBindStore(Path.Combine(_library.SettingsFolder, "keybinds.json"));
+        _account = new Account(Path.Combine(_library.SettingsFolder, "account.token"));
 
         try { _player = new SoundPlayer(); }
         catch (Exception ex) { _playerError = ex.Message; }
@@ -747,6 +749,11 @@ public partial class MainWindow : Window
     }
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
+
+    private void Account_Click(object sender, RoutedEventArgs e)
+    {
+        new AccountWindow(_account, _lobby, _library) { Owner = this }.Show();
+    }
 
     private void ShowFromTray()
     {

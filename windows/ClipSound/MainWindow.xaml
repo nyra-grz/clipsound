@@ -145,6 +145,13 @@
                         <TextBlock Text="Lobby"/>
                     </StackPanel>
                 </Button>
+                <Button x:Name="AccountBtn" Click="Account_Click" Margin="0,0,8,0"
+                        ToolTip="Konto &amp; Clans: anmelden und mit deinem Clan zusammen abspielen">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE77B;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                        <TextBlock Text="Clans"/>
+                    </StackPanel>
+                </Button>
                 <ToggleButton x:Name="Overlap" Margin="0,0,16,0" ToolTip="Mehrere Sounds gleichzeitig abspielen"
                               Checked="Overlap_Changed" Unchecked="Overlap_Changed">
                     <StackPanel Orientation="Horizontal">
