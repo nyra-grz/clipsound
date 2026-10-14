@@ -31,6 +31,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { Pool } = require('pg');
 const { WebSocketServer } = require('ws');
+const clans = require('./clans');
 
 const PORT = process.env.PORT || 3000;
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
@@ -76,6 +77,7 @@ async function migrate() {
       PRIMARY KEY (code, id)
     );
   `);
+  await clans.migrate(db); // Accounts & Clans (additiv, bricht die Lobbys nicht)
 }
 
 // ---------- Hilfen ----------
@@ -311,6 +313,11 @@ async function route(req, res) {
         { 'Cache-Control': 'public, max-age=31536000, immutable' }); // gleicher Hash = gleiche Datei
     }
     return json(res, 404, { error: 'Nicht gefunden' });
+  }
+
+  if (p.startsWith('/api/account') || p.startsWith('/api/clans')) {
+    await clans.handle(req, res, { db, readBody, json });
+    return;
   }
 
   const rel = p === '/' || /^\/l\/[A-Za-z0-9]+$/.test(p) ? 'index.html' : path.basename(p);
