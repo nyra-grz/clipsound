@@ -2,7 +2,6 @@ using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Net.WebSockets;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -13,6 +12,8 @@ namespace ClipSound;
 // die Mac-App und die Webseite, darum geht Crossplay Windows ↔ Mac ↔ Browser.
 // Wer die Lobby öffnet (Host), bringt seine Sounds mit; Gäste sehen sie und können sie abspielen.
 // Jeder gedrückte Sound startet bei allen zur gleichen Zeit. Behalten nur, wenn beide zustimmen.
+// Der Server speichert keine Dateien: Wer einen Sound hat (Host oder Gast mit fertigem Download),
+// meldet das („have“) und schickt ihn auf Anfrage („send“) – der Server reicht ihn nur weiter.
 
 public sealed class LobbySound
 {
@@ -46,7 +47,7 @@ public sealed class Lobby
     public string HostName { get; private set; } = "";
     public string Me { get; private set; } = "";
     public List<LobbyMember> Members { get; private set; } = new();
-    /// <summary>Gast: Sounds des Hosts. Host: seine eigenen, sobald sie auf dem Server sind.</summary>
+    /// <summary>Gast: Sounds des Hosts. Host: seine eigenen, sobald der Server sie listet.</summary>
     public List<LobbySound> Sounds { get; private set; } = new();
     public (int Done, int Total)? Uploaded { get; private set; }
     public bool Active => Phase != LobbyPhase.Off;
@@ -76,6 +77,7 @@ public sealed class Lobby
     private ClientWebSocket? _socket;
     private CancellationTokenSource? _cts;
     private string? _hostToken;
+    private string? _ticket;     // Clan-Session: Zugang aus POST /api/clans/:id/session
     private string _name = "";
     private int _retry;
     private double _offset;      // Serverzeit − meine Zeit (ms)
@@ -83,9 +85,8 @@ public sealed class Lobby
     private System.Threading.Timer? _pingTimer;
     private CancellationTokenSource? _syncCts;
     private readonly HashSet<string> _downloading = new();
+    private readonly Dictionary<string, int> _failures = new();
 
-    // Host: Hash pro Datei (Pfad → (Größe, Änderungszeit, sha))
-    private readonly Dictionary<string, (long, DateTime, string)> _hashCache = new();
     private Dictionary<string, Sound> _hostFiles = new();   // sha → eigene Datei
     private Dictionary<string, string> _hostIds = new();    // Dateiname → sha
     private IReadOnlyList<Sound> _pendingFiles = Array.Empty<Sound>();
@@ -137,13 +138,13 @@ public sealed class Lobby
         Connect();
     }
 
-    /// <summary>Clan-Session: zu einem bereits bestehenden Code verbinden (serverseitig schon mit den
-    /// Clan-Sounds angelegt). Mit hostToken = als Host, ohne = als Gast.</summary>
-    public void JoinSession(string code, string? hostToken, string name)
+    /// <summary>Clan-Session: zu einem bestehenden Code verbinden (der Server hat die Lobby schon mit den
+    /// Clan-Sounds angelegt). Einen Host gibt es nicht – das Ticket weist einen als Clan-Mitglied aus.</summary>
+    public void JoinSession(string code, string ticket, string name)
     {
         if (Active) return;
         _name = name;
-        Code = code; IsHost = hostToken is not null; _hostToken = hostToken;
+        Code = code; IsHost = false; _hostToken = null; _ticket = ticket;
         Phase = LobbyPhase.Connecting; Notify();
         Connect();
     }
@@ -158,9 +159,9 @@ public sealed class Lobby
         _pingTimer?.Dispose(); _pingTimer = null;
         _volumeTimer?.Dispose(); _volumeTimer = null; _reportedVolume = null;
         _syncCts?.Cancel();
-        Code = ""; IsHost = false; _hostToken = null; HostName = "";
+        Code = ""; IsHost = false; _hostToken = null; _ticket = null; HostName = "";
         Members = new(); Sounds = new(); Uploaded = null;
-        _hostFiles = new(); _hostIds = new();
+        _hostFiles = new(); _hostIds = new(); _failures.Clear();
         Stop?.Invoke();
         if (!wasHost) try { Directory.Delete(_cache, true); } catch { } // fremde Sounds nicht liegen lassen
         Changed?.Invoke();
@@ -177,7 +178,7 @@ public sealed class Lobby
     /// <summary>Host: Sound aus der eigenen Bibliothek. false, wenn er (noch) nicht in der Lobby ist.</summary>
     public bool PlayOwn(Sound sound)
     {
-        // erst wenn die Datei auf dem Server ist (der Server listet nur fertige Sounds)
+        // erst wenn der Server ihn listet (er listet nur Sounds, die ein Gerät gemeldet hat)
         if (Phase != LobbyPhase.Open || !_hostIds.TryGetValue(sound.FileName, out var sha) || !Sounds.Any(s => s.Id == sha)) return false;
         Send(new { type = "play", id = sha });
         return true;
@@ -263,28 +264,13 @@ public sealed class Lobby
         foreach (var sound in _pendingFiles)
         {
             ct.ThrowIfCancellationRequested();
-            try
-            {
-                var info = new FileInfo(sound.Path);
-                string sha;
-                lock (_hashCache)
-                {
-                    if (_hashCache.TryGetValue(sound.Path, out var c) && c.Item1 == info.Length && c.Item2 == info.LastWriteTimeUtc) sha = c.Item3;
-                    else sha = "";
-                }
-                if (sha == "")
-                {
-                    using var f = File.OpenRead(sound.Path);
-                    sha = Convert.ToHexStringLower(SHA256.HashData(f));
-                    lock (_hashCache) _hashCache[sound.Path] = (info.Length, info.LastWriteTimeUtc, sha);
-                }
-                list.Add((sound, sha, info.Length));
-            }
-            catch { /* Datei weg oder gesperrt – überspringen */ }
+            if (FileHash.Sha256(sound.Path) is not { } sha) continue; // Datei weg oder gesperrt – überspringen
+            try { list.Add((sound, sha, new FileInfo(sound.Path).Length)); } catch { }
         }
         var files = list.GroupBy(x => x.Sha).ToDictionary(g => g.Key, g => g.First().Sound);
         var ids = list.ToDictionary(x => x.Sound.FileName, x => x.Sha);
-        OnUi(() => { _hostFiles = files; _hostIds = ids; });
+        // zuerst melden, was hier liegt – dann die Liste schicken
+        OnUi(() => { _hostFiles = files; _hostIds = ids; Announce(); });
 
         var req = new HttpRequestMessage(HttpMethod.Put, new Uri(Server, $"api/lobbies/{Code}/sounds"))
         {
@@ -295,23 +281,27 @@ public sealed class Lobby
         var resp = await _http.SendAsync(req, ct);
         if (!resp.IsSuccessStatusCode) return;
         var obj = JsonNode.Parse(await resp.Content.ReadAsStringAsync(ct))!;
-        var missing = obj["missing"]!.AsArray().Select(x => (string)x!).ToList();
-        var skipped = obj["skipped"]!.AsArray().Count;
-        int total = list.Select(x => x.Sha).Distinct().Count() - skipped, done = total - missing.Count;
-        OnUi(() => { Uploaded = (done, total); Changed?.Invoke(); });
+        var skipped = obj["skipped"]?.AsArray().Count ?? 0;
+        int total = files.Count - skipped;
+        OnUi(() => { Uploaded = (total, total); Changed?.Invoke(); });
         if (skipped > 0) Say($"{skipped} Sound(s) zu groß für die Lobby (max. 150 MB gesamt).");
-        foreach (var sha in missing)
-        {
-            ct.ThrowIfCancellationRequested();
-            if (!files.TryGetValue(sha, out var sound)) continue;
-            var up = new HttpRequestMessage(HttpMethod.Put, new Uri(Server, $"api/lobbies/{Code}/blobs/{sha}"))
-            {
-                Content = new ByteArrayContent(await File.ReadAllBytesAsync(sound.Path, ct)),
-            };
-            up.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            var r = await _http.SendAsync(up, ct);
-            if (r.IsSuccessStatusCode) { done++; var d = done; OnUi(() => { Uploaded = (d, total); Changed?.Invoke(); }); }
-        }
+    }
+
+    // ---------- Dateien weitergeben (der Server speichert nichts) ----------
+
+    /// <summary>Dem Server sagen, welche Sounds auf diesem PC liegen</summary>
+    private void Announce()
+    {
+        var ids = IsHost ? _hostFiles.Keys.ToArray() : Sounds.Where(s => s.Local is not null).Select(s => s.Id).ToArray();
+        Send(new { type = "have", ids });
+    }
+
+    /// <summary>Der Server bittet um eine Datei für jemand anderen</summary>
+    private void Serve(string rid, string id)
+    {
+        var path = IsHost ? _hostFiles.GetValueOrDefault(id)?.Path : Sounds.FirstOrDefault(s => s.Id == id)?.Local?.Path;
+        if (path is null) { Send(new { type = "nosend", rid }); return; }
+        _ = Task.Run(() => Relay.SendAsync(Server, rid, path));
     }
 
     // ---------- Verbindung ----------
@@ -325,6 +315,7 @@ public sealed class Lobby
         var b = new UriBuilder(new Uri(Server, "ws")) { Scheme = Server.Scheme == "https" ? "wss" : "ws" };
         var q = $"lobby={Code}&name={Uri.EscapeDataString(_name)}";
         if (_hostToken is not null) q += "&token=" + Uri.EscapeDataString(_hostToken);
+        if (_ticket is not null) q += "&ticket=" + Uri.EscapeDataString(_ticket);
         b.Query = q;
         _ = Task.Run(async () =>
         {
@@ -366,7 +357,7 @@ public sealed class Lobby
         string? why = code switch
         {
             4404 => "Diese Lobby gibt es nicht (mehr).",
-            4401 => "Lobby-Zugang ungültig.",
+            4401 => _ticket is not null ? "Kein Zugang zur Clan-Session – bist du noch im Clan?" : "Lobby-Zugang ungültig.",
             4409 => "Die Lobby ist voll.",
             4410 => _closedReason ?? "Die Lobby wurde geschlossen.",
             4429 => "Zu viele falsche Codes – warte ein paar Minuten.",
@@ -411,6 +402,7 @@ public sealed class Lobby
                 if (_bestRtt == double.MaxValue) _offset = (double)msg["serverTime"]! - NowMs;
                 SetMembers(msg["members"]); SetSounds(msg["sounds"]);
                 if (IsHost) HostLibraryChanged(_pendingFiles); // nach Neuverbindung Liste auffrischen
+                else Announce();
                 // Lautstärke melden, auch wenn man sie selbst in Windows ändert
                 _reportedVolume = null;
                 ReportVolume();
@@ -451,6 +443,9 @@ public sealed class Lobby
                 return;
             }
             case "closed": _closedReason = (string?)msg["reason"]; return;
+            case "send":
+                if ((string?)msg["rid"] is { } rid && (string?)msg["id"] is { } sid) Serve(rid, sid);
+                return;
         }
         Changed?.Invoke();
     }
@@ -476,7 +471,7 @@ public sealed class Lobby
             try
             {
                 var data = await _http.GetByteArrayAsync(new Uri(Server, $"api/lobbies/{code}/blobs/{sound.Id}"));
-                if (Convert.ToHexStringLower(SHA256.HashData(data)) == sound.Id) { OnUi(() => SaveReceived(sound, data)); return; }
+                if (FileHash.Hex(data) == sound.Id) { OnUi(() => SaveReceived(sound, data)); return; }
             }
             catch { }
             Say($"„{sound.Title}“ konnte nicht gespeichert werden.");
@@ -533,22 +528,35 @@ public sealed class Lobby
             // drei gleichzeitig reicht und schont den Server
             await Parallel.ForEachAsync(todo, new ParallelOptions { MaxDegreeOfParallelism = 3 }, async (s, ct) =>
             {
+                bool ok = false;
                 try
                 {
                     var data = await _http.GetByteArrayAsync(new Uri(Server, $"api/lobbies/{code}/blobs/{s.Id}"), ct);
-                    if (Convert.ToHexStringLower(SHA256.HashData(data)) != s.Id) return;
-                    var dest = CachePath(s);
-                    await File.WriteAllBytesAsync(dest, data, ct);
-                    OnUi(() =>
+                    if (FileHash.Hex(data) == s.Id)
                     {
-                        if (Code != code) return;
-                        var current = Sounds.FirstOrDefault(x => x.Id == s.Id);
-                        if (current is not null) current.Local = new Sound(dest);
-                        Changed?.Invoke();
-                    });
+                        var dest = CachePath(s);
+                        await File.WriteAllBytesAsync(dest, data, ct);
+                        ok = true;
+                        OnUi(() =>
+                        {
+                            if (Code != code) return;
+                            var current = Sounds.FirstOrDefault(x => x.Id == s.Id);
+                            if (current is not null) current.Local = new Sound(dest);
+                            Announce(); // ab jetzt kann dieser PC den Sound auch an andere weitergeben
+                            Changed?.Invoke();
+                        });
+                    }
                 }
                 catch { }
                 finally { OnUi(() => _downloading.Remove(s.Id)); }
+                // Das Gerät mit der Datei war kurz weg o. Ä. – in ein paar Sekunden nochmal (höchstens 3-mal)
+                if (!ok) _ = Task.Delay(5000).ContinueWith(_ => OnUi(() =>
+                {
+                    if (Code != code || !Active || IsHost) return;
+                    var tries = _failures.GetValueOrDefault(s.Id) + 1;
+                    _failures[s.Id] = tries;
+                    if (tries <= 3) Download(Sounds.Where(x => x.Id == s.Id && x.Local is null).ToList());
+                }));
             });
         });
     }

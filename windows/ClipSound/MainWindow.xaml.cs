@@ -60,6 +60,8 @@ public partial class MainWindow : Window
         _library = new SoundLibrary(Arg("--library"));
         _keys = new KeyBindStore(Path.Combine(_library.SettingsFolder, "keybinds.json"));
         _account = new Account(Path.Combine(_library.SettingsFolder, "account.token"));
+        _account.Attach(_library); // Clan-Sounds von diesem PC aus weitergeben
+        _library.Changed += () => _lobby.HostLibraryChanged(_library.Sounds); // als Host: Liste in der Lobby aktuell halten
 
         try { _player = new SoundPlayer(); }
         catch (Exception ex) { _playerError = ex.Message; }

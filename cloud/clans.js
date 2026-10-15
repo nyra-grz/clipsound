@@ -2,13 +2,15 @@
 // Baut auf demselben Postgres wie die Lobbys auf (additive Tabellen – bestehende Lobbys bleiben).
 // Accounts: E-Mail + Passwort, Bestätigung per 6-stelligem Code (Resend).
 // Clans: wie eine WhatsApp-Gruppe – Beitritt nur mit Invite-Code, der Admin gibt Anfragen frei.
-// Clan-Sounds und Clan-Sessions kommen in einem weiteren Schritt dazu (Tabellen sind schon da).
+// Clan-Sounds und Clan-Sessions stehen in server.js (sie brauchen die Geräte-Verbindungen).
 //
 // HTTP (alles JSON)
 //   POST /api/account/register  {email, name, password}      → {ok}                 (schickt Code per Mail)
 //   POST /api/account/verify    {email, code}                → {token, user}
 //   POST /api/account/resend    {email}                      → {ok}
 //   POST /api/account/login     {email, password}            → {token, user}
+//   POST /api/account/logout    (Bearer)                     → {ok}                 (Token wird ungültig)
+//   POST /api/account/delete    (Bearer) {password}          → {ok}                 (Konto und alle Daten löschen)
 //   GET  /api/account/me        (Bearer)                     → {user, clans}
 //   GET  /api/clans             (Bearer)                     → {clans:[{id,name,role,members}]}
 //   POST /api/clans             (Bearer) {name}              → {clan}               (Ersteller = Admin)
@@ -123,14 +125,51 @@ async function migrate(db) {
   `);
 }
 
+/** Nutzer zu einem Anmelde-Token, oder null. */
+async function userFromToken(db, token) {
+  if (typeof token !== 'string' || !token) return null;
+  const { rows } = await db.query(
+    'SELECT u.id, u.email, u.name, u.verified FROM account_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1',
+    [hashToken(token)]);
+  return rows[0] || null;
+}
+
 /** Nutzer aus dem Bearer-Token, oder null. */
 async function authUser(db, req) {
   const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
-  if (!m) return null;
-  const { rows } = await db.query(
-    'SELECT u.id, u.email, u.name, u.verified FROM account_tokens t JOIN users u ON u.id = t.user_id WHERE t.token_hash = $1',
-    [hashToken(m[1])]);
-  return rows[0] || null;
+  return m ? userFromToken(db, m[1]) : null;
+}
+
+/**
+ * Konto mit allem löschen. Eigene Clans gehen an ein anderes Mitglied (Admins zuerst, sonst wer am
+ * längsten drin ist); ohne weitere Mitglieder wird der Clan aufgelöst. Gibt die aufgelösten Clans zurück.
+ */
+async function deleteAccount(db, user) {
+  const client = await db.connect();
+  const gone = [];
+  try {
+    await client.query('BEGIN');
+    const owned = (await client.query('SELECT id FROM clans WHERE owner_id = $1', [user.id])).rows;
+    for (const { id } of owned) {
+      const next = (await client.query(
+        "SELECT user_id FROM clan_members WHERE clan_id = $1 AND user_id <> $2 ORDER BY (role = 'admin') DESC, joined_at LIMIT 1",
+        [id, user.id])).rows[0];
+      if (next) {
+        await client.query('UPDATE clans SET owner_id = $2 WHERE id = $1', [id, next.user_id]);
+        await client.query("UPDATE clan_members SET role = 'admin' WHERE clan_id = $1 AND user_id = $2", [id, next.user_id]);
+      } else {
+        await client.query('DELETE FROM clans WHERE id = $1', [id]);
+        gone.push(id);
+      }
+    }
+    await client.query('UPDATE clan_sounds SET added_by = NULL WHERE added_by = $1', [user.id]);
+    await client.query('DELETE FROM email_codes WHERE email = $1', [user.email]);
+    await client.query('DELETE FROM users WHERE id = $1', [user.id]); // Tokens, Mitgliedschaften, Anfragen hängen dran
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK'); throw e;
+  } finally { client.release(); }
+  return gone;
 }
 
 /** Rolle im Clan ('admin'|'member') oder null, wenn nicht Mitglied. */
@@ -139,9 +178,14 @@ async function memberRole(db, clanId, userId) {
   return rows[0]?.role || null;
 }
 
-/** true = Request wurde hier beantwortet. ctx: {db, readBody, json} */
+/**
+ * true = Request wurde hier beantwortet. ctx: {db, readBody, json, hooks}
+ * hooks (aus server.js): membershipChanged(userId), userGone(userId), clanGone(clanId)
+ */
 async function handle(req, res, ctx) {
   const { db, readBody, json } = ctx;
+  const hooks = ctx.hooks || {};
+  const later = (fn, ...args) => { if (fn) Promise.resolve(fn(...args)).catch(e => console.error('Clan-Hook', e)); };
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
   if (!p.startsWith('/api/account') && !p.startsWith('/api/clans')) return false;
@@ -221,6 +265,24 @@ async function handle(req, res, ctx) {
       return json(res, 200, { user: { id: me.id, email: me.email, name: me.name }, clans: await myClans(db, me.id) });
     }
 
+    if (p === '/api/account/logout' && req.method === 'POST') {
+      const m = /^Bearer (.+)$/.exec(req.headers.authorization || '');
+      if (m) await db.query('DELETE FROM account_tokens WHERE token_hash = $1', [hashToken(m[1])]);
+      return json(res, 200, { ok: true });
+    }
+
+    if (p === '/api/account/delete' && req.method === 'POST') {
+      if (!me) return json(res, 401, { error: 'Nicht eingeloggt' });
+      const b = await body();
+      const { rows } = await db.query('SELECT pass_hash FROM users WHERE id = $1', [me.id]);
+      if (!rows[0] || !verifyPassword(b.password, rows[0].pass_hash)) return json(res, 403, { error: 'Passwort stimmt nicht' });
+      const gone = await deleteAccount(db, me);
+      later(hooks.userGone, me.id);
+      for (const clanId of gone) later(hooks.clanGone, clanId);
+      console.log('Konto gelöscht');
+      return json(res, 200, { ok: true });
+    }
+
     // ---------- Clans ----------
     if (p === '/api/clans' && req.method === 'GET') {
       if (!me) return json(res, 401, { error: 'Nicht eingeloggt' });
@@ -243,6 +305,7 @@ async function handle(req, res, ctx) {
       }
       if (!invite) return json(res, 503, { error: 'Kein Code frei, bitte nochmal' });
       await db.query('INSERT INTO clan_members (clan_id, user_id, role) VALUES ($1, $2, \'admin\')', [id, me.id]);
+      later(hooks.membershipChanged, me.id);
       return json(res, 200, { clan: { id, name, inviteCode: invite, role: 'admin', members: 1 } });
     }
 
@@ -309,7 +372,10 @@ async function handle(req, res, ctx) {
         const pending = (await db.query('SELECT 1 FROM clan_requests WHERE clan_id = $1 AND user_id = $2', [clanId, userId])).rowCount;
         if (!pending) return json(res, 404, { error: 'Keine Anfrage von dieser Person' });
         await db.query('DELETE FROM clan_requests WHERE clan_id = $1 AND user_id = $2', [clanId, userId]);
-        if (b.ok === true) await db.query('INSERT INTO clan_members (clan_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [clanId, userId]);
+        if (b.ok === true) {
+          await db.query('INSERT INTO clan_members (clan_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [clanId, userId]);
+          later(hooks.membershipChanged, userId);
+        }
         return json(res, 200, { ok: true });
       }
 
@@ -317,6 +383,7 @@ async function handle(req, res, ctx) {
         if (!myRole) return json(res, 200, { ok: true });
         if (clan.owner_id === me.id) return json(res, 400, { error: 'Der Besitzer kann den Clan nicht verlassen (nur auflösen).' });
         await db.query('DELETE FROM clan_members WHERE clan_id = $1 AND user_id = $2', [clanId, me.id]);
+        later(hooks.membershipChanged, me.id);
         return json(res, 200, { ok: true });
       }
     }
@@ -338,4 +405,4 @@ async function myClans(db, userId) {
   return rows;
 }
 
-module.exports = { migrate, handle, authUser, memberRole };
+module.exports = { migrate, handle, authUser, userFromToken, memberRole };

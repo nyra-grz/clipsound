@@ -21,6 +21,8 @@ public sealed class SoundLibrary
 
     public string Folder { get; }
     public List<Sound> Sounds { get; private set; } = new();
+    /// <summary>Die Liste hat sich geändert (Import, Löschen, neu eingelesen)</summary>
+    public event Action? Changed;
 
     /// <summary>%AppData%\ClipSound – übernimmt einmalig den alten „Meme Soundboard“-Ordner.</summary>
     public static string SupportFolder { get; } = CreateSupportFolder();
@@ -100,6 +102,7 @@ public sealed class SoundLibrary
             .ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
             .Select(f => new Sound(f.FullName))
             .ToList();
+        Changed?.Invoke();
     }
 
     /// <summary>Importiert Dateien und ganze Ordner. Nur Dateien, die sich als Audio öffnen lassen, werden übernommen.</summary>

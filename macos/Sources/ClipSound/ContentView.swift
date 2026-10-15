@@ -228,6 +228,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: board.lobby, library: library) }
         .sheet(isPresented: $showAccount) { AccountSheet(account: account, lobby: board.lobby, library: library) }
+        .onAppear { account.attach(library) } // Clan-Sounds von diesem Mac aus weitergeben
         .alert(requestTitle, isPresented: requestShown, presenting: board.lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { board.lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { board.lobby.answer(request, ok: false) }

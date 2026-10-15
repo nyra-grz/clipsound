@@ -134,6 +134,12 @@ struct LobbySheet: View {
                             Label(problem, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                         }
                     }
+
+                    Section {
+                        Link("Datenschutzerklärung", destination: Account.privacyURL)
+                    } footer: {
+                        Text("Der Server speichert keine Sounds. Sie gehen direkt von Gerät zu Gerät.")
+                    }
                 }
             }
             .navigationTitle("Zusammen abspielen")

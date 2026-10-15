@@ -277,6 +277,9 @@ struct ClipSoundApp: App {
             CommandGroup(after: .appInfo) {
                 Button("Nach Updates suchen …") { Task { await updater.check(userInitiated: true) } }
             }
+            CommandGroup(replacing: .help) {
+                Button("Datenschutzerklärung") { NSWorkspace.shared.open(Account.privacyURL) }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Sounds importieren …") { board.openImportPanel() }
                     .keyboardShortcut("o")

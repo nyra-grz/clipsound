@@ -1,10 +1,11 @@
 import AVFoundation
-import CryptoKit
 import Foundation
 
 // Lobby: gemeinsam abspielen über den ClipSound-Server (cloud/server.js).
 // Wer die Lobby öffnet (Host), bringt seine Sounds mit; Gäste sehen sie und können sie abspielen.
 // Jeder gedrückte Sound startet bei allen zur gleichen Zeit. Behalten nur, wenn beide zustimmen.
+// Der Server speichert keine Dateien: Wer einen Sound hat (Host oder Gast mit fertigem Download),
+// meldet das („have“) und schickt ihn auf Anfrage („send“) – der Server reicht ihn nur weiter.
 // Diese Datei wird von der Mac- und der iOS-App benutzt.
 
 struct LobbySound: Identifiable, Hashable {
@@ -58,7 +59,7 @@ final class Lobby: ObservableObject {
     @Published private(set) var me = ""
     /// Gast: Sounds des Hosts (local == nil heißt: lädt noch)
     @Published private(set) var sounds: [LobbySound] = []
-    /// Host: wie viele eigene Sounds schon in der Lobby sind
+    /// Host: wie viele eigene Sounds in der Lobby sind
     @Published private(set) var uploaded: (done: Int, total: Int)?
     @Published var requests: [LobbyRequest] = []
     /// Kurze Meldung für die Oberfläche (z. B. „Daniel hat gestoppt“)
@@ -84,14 +85,13 @@ final class Lobby: ObservableObject {
     private let session = URLSession(configuration: .default)
     private var socket: URLSessionWebSocketTask?
     private var hostToken: String?
+    private var ticket: String?           // Clan-Session: Zugang aus POST /api/clans/:id/session
     private var retry = 0
     private var offset: TimeInterval = 0   // Serverzeit − meine Zeit
     private var bestRTT = TimeInterval.infinity
     private var pingTimer: Timer?
     private var syncTask: Task<Void, Never>?
 
-    // Host: Hash pro Datei (Pfad → (Größe, Änderungsdatum, sha))
-    private var hashCache: [String: (Int, Date, String)] = [:]
     private var hostFiles: [String: Sound] = [:]  // sha → eigene Datei
     private var hostIDs: [String: String] = [:]   // Datei-ID → sha
     private var pendingFiles: [Sound] = []
@@ -161,14 +161,15 @@ final class Lobby: ObservableObject {
         connect()
     }
 
-    /// Clan-Session: zu einem bereits bestehenden Code verbinden (die Lobby wurde serverseitig
-    /// schon mit den Clan-Sounds angelegt). Mit hostToken = als Host, ohne = als Gast.
-    func joinSession(code: String, hostToken: String?) {
+    /// Clan-Session: zu einem bestehenden Code verbinden (der Server hat die Lobby schon mit den
+    /// Clan-Sounds angelegt). Einen Host gibt es nicht – alle sind Gäste, das Ticket weist einen als Mitglied aus.
+    func joinSession(code: String, ticket: String) {
         guard phase == .off else { return }
         problem = nil
         self.code = code
-        self.isHost = hostToken != nil
-        self.hostToken = hostToken
+        isHost = false
+        hostToken = nil
+        self.ticket = ticket
         phase = .connecting
         connect()
     }
@@ -182,9 +183,9 @@ final class Lobby: ObservableObject {
         volumeTimer?.invalidate(); volumeTimer = nil
         reportedVolume = nil
         syncTask?.cancel(); syncTask = nil
-        code = ""; isHost = false; hostToken = nil; hostName = ""
+        code = ""; isHost = false; hostToken = nil; ticket = nil; hostName = ""
         members = []; sounds = []; requests = []; uploaded = nil
-        hostFiles = [:]; hostIDs = [:]
+        hostFiles = [:]; hostIDs = [:]; failures = [:]
         onStop?()
         if !wasHost { try? FileManager.default.removeItem(at: cache) } // fremde Sounds nicht liegen lassen
     }
@@ -199,7 +200,7 @@ final class Lobby: ObservableObject {
 
     /// Host: Sound aus der eigenen Bibliothek. Gibt false zurück, wenn er (noch) nicht in der Lobby ist.
     func play(own sound: Sound) -> Bool {
-        // erst wenn die Datei auf dem Server ist (der Server listet nur fertige Sounds)
+        // erst wenn der Server ihn in der Liste hat (er listet nur Sounds, die ein Gerät gemeldet hat)
         guard phase == .open, let sha = hostIDs[sound.id], sounds.contains(where: { $0.id == sha }) else { return false }
         send(["type": "play", "id": sha])
         return true
@@ -274,27 +275,22 @@ final class Lobby: ObservableObject {
     private func syncHost() async {
         guard let token = hostToken else { return }
         let files = pendingFiles
-        // Hashen kostet Zeit, also im Hintergrund und mit Cache
-        let cacheSnapshot = hashCache
-        let hashed: [(Sound, String, Int, Date)] = await Task.detached(priority: .utility) {
+        // Hashen kostet Zeit, also im Hintergrund (FileHash merkt sich bekannte Dateien)
+        let hashed: [(Sound, String, Int)] = await Task.detached(priority: .utility) {
             files.compactMap { sound in
-                let attrs = try? FileManager.default.attributesOfItem(atPath: sound.url.path)
-                let size = (attrs?[.size] as? NSNumber)?.intValue ?? 0
-                let date = attrs?[.modificationDate] as? Date ?? .distantPast
-                if let c = cacheSnapshot[sound.url.path], c.0 == size, c.1 == date { return (sound, c.2, size, date) }
-                guard let data = try? Data(contentsOf: sound.url) else { return nil }
-                let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-                return (sound, sha, size, date)
+                guard let sha = FileHash.sha256(of: sound.url), let size = FileHash.size(of: sound.url) else { return nil }
+                return (sound, sha, size)
             }
         }.value
         guard !Task.isCancelled else { return }
 
         await MainActor.run {
-            for (sound, sha, size, date) in hashed {
-                hashCache[sound.url.path] = (size, date, sha)
+            hostFiles = [:]; hostIDs = [:]
+            for (sound, sha, _) in hashed {
                 hostFiles[sha] = sound
                 hostIDs[sound.id] = sha
             }
+            announce() // zuerst melden, was hier liegt – dann die Liste schicken
         }
         let list = hashed.map { ["id": $0.1, "name": $0.0.url.lastPathComponent, "size": $0.2] as [String: Any] }
         do {
@@ -305,26 +301,31 @@ final class Lobby: ObservableObject {
             let (data, resp) = try await session.data(for: req)
             guard (resp as? HTTPURLResponse)?.statusCode == 200,
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-            let missing = obj["missing"] as? [String] ?? []
             let skipped = obj["skipped"] as? [String] ?? []
-            let total = list.count - skipped.count
+            let total = Set(hashed.map(\.1)).count - skipped.count
             await MainActor.run {
-                self.uploaded = (total - missing.count, total)
+                self.uploaded = (total, total)
                 if !skipped.isEmpty { self.note = "\(skipped.count) Sound(s) zu groß für die Lobby (max. 150 MB gesamt)." }
             }
-            for sha in missing {
-                guard !Task.isCancelled, let sound = await MainActor.run(body: { self.hostFiles[sha] }) else { return }
-                var up = URLRequest(url: server.appendingPathComponent("api/lobbies/\(code)/blobs/\(sha)"))
-                up.httpMethod = "PUT"
-                up.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                let (_, r) = try await session.upload(for: up, fromFile: sound.url)
-                if (r as? HTTPURLResponse)?.statusCode == 200 {
-                    await MainActor.run { if let u = self.uploaded { self.uploaded = (u.done + 1, u.total) } }
-                }
-            }
         } catch {
-            await MainActor.run { self.note = "Hochladen hat nicht geklappt – versuche es gleich nochmal." }
+            await MainActor.run { self.note = "Sounds freigeben hat nicht geklappt – versuche es gleich nochmal." }
         }
+    }
+
+    // MARK: Dateien weitergeben (der Server speichert nichts)
+
+    /// Dem Server sagen, welche Sounds auf diesem Gerät liegen
+    private func announce() {
+        let ids = isHost ? Array(hostFiles.keys) : sounds.filter { $0.local != nil }.map(\.id)
+        send(["type": "have", "ids": ids])
+    }
+
+    /// Der Server bittet um eine Datei für jemand anderen
+    private func serve(rid: String, id: String) {
+        let file = isHost ? hostFiles[id]?.url : sounds.first(where: { $0.id == id })?.local?.url
+        guard let file else { send(["type": "nosend", "rid": rid]); return }
+        let server = server
+        Task.detached(priority: .utility) { await Relay.send(file, rid: rid, server: server) }
     }
 
     // MARK: Verbindung
@@ -334,6 +335,7 @@ final class Lobby: ObservableObject {
         comps.scheme = server.scheme == "https" ? "wss" : "ws"
         comps.queryItems = [URLQueryItem(name: "lobby", value: code), URLQueryItem(name: "name", value: personName)]
         if let hostToken { comps.queryItems?.append(URLQueryItem(name: "token", value: hostToken)) }
+        if let ticket { comps.queryItems?.append(URLQueryItem(name: "ticket", value: ticket)) }
         let task = session.webSocketTask(with: comps.url!)
         socket = task
         task.resume()
@@ -368,7 +370,7 @@ final class Lobby: ObservableObject {
         guard phase != .off else { return }
         switch code {
         case 4404: fail(LobbyError.message("Diese Lobby gibt es nicht (mehr)."))
-        case 4401: fail(LobbyError.message("Lobby-Zugang ungültig."))
+        case 4401: fail(LobbyError.message(ticket != nil ? "Kein Zugang zur Clan-Session – bist du noch im Clan?" : "Lobby-Zugang ungültig."))
         case 4409: fail(LobbyError.message("Die Lobby ist voll."))
         case 4410: fail(LobbyError.message(problem ?? "Die Lobby wurde geschlossen."))
         case 4429: fail(LobbyError.message("Zu viele falsche Codes – warte ein paar Minuten."))
@@ -406,6 +408,7 @@ final class Lobby: ObservableObject {
             setMembers(msg["members"])
             setSounds(msg["sounds"])
             if isHost { hostLibraryChanged(pendingFiles) } // nach Neuverbindung Liste auffrischen
+            else { announce() }
             // Lautstärke melden, auch wenn man sie selbst am Mac ändert
             reportedVolume = nil
             reportVolume()
@@ -441,6 +444,8 @@ final class Lobby: ObservableObject {
             if set(level) { reportVolume() } // still, ohne Meldung
         case "closed":
             problem = msg["reason"] as? String
+        case "send":
+            if let rid = msg["rid"] as? String, let id = msg["id"] as? String { serve(rid: rid, id: id) }
         default:
             break
         }
@@ -466,7 +471,7 @@ final class Lobby: ObservableObject {
         let url = server.appendingPathComponent("api/lobbies/\(code)/blobs/\(sound.id)")
         Task {
             if let (data, resp) = try? await session.data(from: url), (resp as? HTTPURLResponse)?.statusCode == 200,
-               SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sound.id {
+               FileHash.hex(data) == sound.id {
                 await MainActor.run { self.saveReceived(sound, data) }
             } else {
                 await MainActor.run { self.note = "„\(sound.title)“ konnte nicht gespeichert werden." }
@@ -519,6 +524,7 @@ final class Lobby: ObservableObject {
     }
 
     private var downloading: Set<String> = []
+    private var failures: [String: Int] = [:]
 
     private func download(_ list: [LobbySound]) {
         try? FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
@@ -546,12 +552,22 @@ final class Lobby: ObservableObject {
         guard let (tmp, resp) = try? await session.download(from: url),
               (resp as? HTTPURLResponse)?.statusCode == 200,
               let data = try? Data(contentsOf: tmp),
-              SHA256.hash(data: data).map({ String(format: "%02x", $0) }).joined() == sound.id else { return }
+              FileHash.hex(data) == sound.id else {
+            // Das Gerät mit der Datei war kurz weg o. Ä. – in ein paar Sekunden nochmal (höchstens 3-mal)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) {
+                guard self.code == code, self.phase != .off, !self.isHost else { return }
+                let tries = (self.failures[sound.id] ?? 0) + 1
+                self.failures[sound.id] = tries
+                if tries <= 3 { self.download(self.sounds.filter { $0.id == sound.id && $0.local == nil }) }
+            }
+            return
+        }
         let dest = cacheURL(for: sound)
         try? data.write(to: dest, options: .atomic)
         await MainActor.run {
             guard self.code == code, let i = self.sounds.firstIndex(where: { $0.id == sound.id }) else { return }
             self.sounds[i].local = Sound(url: dest)
+            self.announce() // ab jetzt kann dieses Gerät den Sound auch an andere weitergeben
         }
     }
 

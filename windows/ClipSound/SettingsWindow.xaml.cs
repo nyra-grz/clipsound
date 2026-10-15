@@ -68,4 +68,6 @@ public partial class SettingsWindow : Window
     }
 
     private void Done_Click(object sender, RoutedEventArgs e) => Close();
+
+    private void Privacy_Click(object sender, RoutedEventArgs e) => Relay.OpenInBrowser(Account.PrivacyUrl);
 }

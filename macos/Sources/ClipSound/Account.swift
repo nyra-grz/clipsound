@@ -1,9 +1,10 @@
 import SwiftUI
+import Combine
 import Foundation
-import CryptoKit
 
 // Konto + Clans gegen den ClipSound-Server (cloud/clans.js). Solo-Modus läuft weiter ohne Konto
 // über Lobby.swift; hier geht es nur um angemeldete Nutzer und ihre Clans.
+// Clan-Sounds liegen nicht auf dem Server, sondern auf den Geräten der Mitglieder (siehe Share.swift).
 
 struct AccountUser: Equatable {
     let id: String
@@ -26,6 +27,8 @@ struct ClanSummary: Identifiable, Equatable, Hashable {
 final class Account: ObservableObject {
     static let server: URL = ProcessInfo.processInfo.environment["CLIPSOUND_SERVER"].flatMap(URL.init(string:))
         ?? URL(string: "https://rooms-production-8e28.up.railway.app")!
+    /// Datenschutzerklärung (gilt für alle Versionen)
+    static var privacyURL: URL { server.appendingPathComponent("datenschutz") }
 
     @Published private(set) var user: AccountUser?
     @Published private(set) var clans: [ClanSummary] = []
@@ -34,16 +37,26 @@ final class Account: ObservableObject {
 
     private(set) var token: String? {
         didSet {
-            if let token { UserDefaults.standard.set(token, forKey: "accountToken") }
-            else { UserDefaults.standard.removeObject(forKey: "accountToken") }
+            if let token { UserDefaults.standard.set(token, forKey: "accountToken"); share.start(token: token) }
+            else { UserDefaults.standard.removeObject(forKey: "accountToken"); share.stop() }
         }
     }
 
     var loggedIn: Bool { user != nil }
 
+    /// Gibt Clan-Sounds aus der eigenen Bibliothek an andere Mitglieder weiter, solange man angemeldet ist.
+    let share = ClanShare(server: Account.server)
+    private var librarySub: AnyCancellable?
+
     init() {
         token = UserDefaults.standard.string(forKey: "accountToken")
-        if token != nil { Task { await refreshMe() } }
+        if let token { share.start(token: token); Task { await refreshMe() } }
+    }
+
+    /// Die eigene Bibliothek für Clans bereitstellen (die App ruft das einmal auf).
+    func attach(_ library: SoundLibrary) {
+        guard librarySub == nil else { return }
+        librarySub = library.$sounds.sink { [weak self] sounds in self?.share.filesChanged(sounds.map(\.url)) }
     }
 
     // MARK: Netzwerk
@@ -125,7 +138,27 @@ final class Account: ObservableObject {
     }
 
     func logout() {
+        // Den Schlüssel auch auf dem Server ungültig machen
+        if let old = token {
+            var req = URLRequest(url: Self.server.appendingPathComponent("api/account/logout"))
+            req.httpMethod = "POST"
+            req.setValue("Bearer \(old)", forHTTPHeaderField: "Authorization")
+            Task { _ = try? await URLSession.shared.data(for: req) }
+        }
         token = nil; user = nil; clans = []
+    }
+
+    /// Konto mit allen Daten löschen (DSGVO Art. 17). Braucht das Passwort.
+    func deleteAccount(password: String) async -> Bool {
+        busy = true; problem = nil; defer { busy = false }
+        switch await api("api/account/delete", method: "POST", body: ["password": password]) {
+        case .success:
+            token = nil; user = nil; clans = []
+            return true
+        case .failure(let e):
+            problem = e.message
+            return false
+        }
     }
 
     /// „Wer bin ich“ + eigene Clans laden. Bei 401 wird ausgeloggt.
@@ -171,6 +204,8 @@ struct ClanMember: Identifiable, Equatable { let id: String; let name: String; l
 struct ClanRequest: Identifiable, Equatable { var id: String { userId }; let userId: String; let name: String; let email: String }
 struct ClanSound: Identifiable, Equatable {
     let id: String; let name: String; let size: Int
+    /// Gerade ist jemand online, der ihn auf dem Gerät hat
+    var available = true
     var title: String {
         (name as NSString).deletingPathExtension.replacingOccurrences(of: "[-_]+", with: " ", options: .regularExpression)
     }
@@ -224,7 +259,7 @@ final class ClanRoom: ObservableObject {
         if case .success(let o) = await account.api("api/clans/\(clanId)/sounds") {
             sounds = (o["sounds"] as? [[String: Any]])?.compactMap {
                 guard let id = $0["id"] as? String, let name = $0["name"] as? String else { return nil }
-                return ClanSound(id: id, name: name, size: ($0["size"] as? Int) ?? 0)
+                return ClanSound(id: id, name: name, size: ($0["size"] as? Int) ?? 0, available: ($0["available"] as? Bool) ?? true)
             } ?? []
         }
     }
@@ -241,58 +276,76 @@ final class ClanRoom: ObservableObject {
         }
     }
 
-    /// Lokale Sounds in die Clan-Bibliothek laden.
-    func upload(_ files: [Sound]) async {
+    /// Eigene Sounds im Clan teilen. Hochgeladen wird nichts: Die Dateien bleiben auf diesem Gerät und gehen
+    /// direkt an die anderen, wenn jemand sie braucht. Dateien von außerhalb kommen dafür in die eigene Bibliothek.
+    func share(_ files: [URL]) async {
         guard !files.isEmpty else { return }
         busy = true; defer { busy = false }
-        var meta: [[String: Any]] = [], byId: [String: Data] = [:]
-        for s in files {
-            guard let data = try? Data(contentsOf: s.url) else { continue }
-            let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            meta.append(["id": sha, "name": s.url.lastPathComponent, "size": data.count])
-            byId[sha] = data
-        }
-        guard case .success(let o) = await account.api("api/clans/\(clanId)/sounds", method: "POST", body: ["sounds": meta]) else {
-            note = account.problem ?? "Hochladen fehlgeschlagen."; return
-        }
-        for id in (o["missing"] as? [String]) ?? [] {
-            guard let data = byId[id] else { continue }
-            await putBlob(id: id, data: data)
+        let libraryFiles = library.sounds.map(\.url)
+        let (meta, outside) = await Task.detached(priority: .userInitiated) { () -> ([[String: Any]], [URL]) in
+            let inLibrary = Set(libraryFiles.map(\.standardizedFileURL.path))
+            var meta: [[String: Any]] = [], outside: [(URL, String)] = []
+            for url in files {
+                guard let sha = FileHash.sha256(of: url), let size = FileHash.size(of: url) else { continue }
+                meta.append(["id": sha, "name": url.lastPathComponent, "size": size])
+                if !inLibrary.contains(url.standardizedFileURL.path) { outside.append((url, sha)) }
+            }
+            // Was es (mit gleichem Inhalt) schon in der Bibliothek gibt, nicht doppelt anlegen
+            let known = outside.isEmpty ? [] : Set(libraryFiles.compactMap { FileHash.sha256(of: $0) })
+            return (meta, outside.filter { !known.contains($0.1) }.map(\.0))
+        }.value
+        if !outside.isEmpty { _ = library.importItems(outside) }
+        guard !meta.isEmpty else { note = "Keine Sounds gefunden."; return }
+        switch await account.api("api/clans/\(clanId)/sounds", method: "POST", body: ["sounds": meta]) {
+        case .success(let o):
+            let skipped = (o["skipped"] as? [String])?.count ?? 0
+            note = skipped > 0 ? "\(skipped) Sound(s) zu groß für den Clan (max. 15 MB pro Sound, 150 MB gesamt)."
+                : "Geteilt. Die anderen bekommen die Sounds direkt von deinem Gerät, solange ClipSound bei dir offen ist."
+        case .failure(let e):
+            note = e.message
         }
         await load()
-        note = "In den Clan geladen."
     }
 
-    private func putBlob(id: String, data: Data) async {
-        var req = URLRequest(url: Account.server.appendingPathComponent("api/clans/\(clanId)/blobs/\(id)"))
-        req.httpMethod = "PUT"
-        if let t = account.token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
-        req.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-        req.httpBody = data
-        _ = try? await URLSession.shared.data(for: req)
+    /// Clan-Sound löschen (nur Admins).
+    func delete(_ s: ClanSound) async {
+        switch await account.api("api/clans/\(clanId)/sounds/\(s.id)", method: "DELETE") {
+        case .success: note = "„\(s.title)“ aus dem Clan gelöscht."
+        case .failure(let e): note = e.message
+        }
+        await load()
     }
 
-    /// Clan-Sound in die eigenen (Solo-)Sounds übernehmen.
+    /// Clan-Sound in die eigenen (Solo-)Sounds übernehmen – kommt direkt vom Gerät eines Mitglieds.
     func takeToSolo(_ s: ClanSound) async {
         var req = URLRequest(url: Account.server.appendingPathComponent("api/clans/\(clanId)/blobs/\(s.id)"))
         if let t = account.token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              (resp as? HTTPURLResponse)?.statusCode == 200 else { note = "Download fehlgeschlagen."; return }
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(s.name)
+        busy = true; defer { busy = false }
+        guard let (data, resp) = try? await URLSession.shared.data(for: req) else { note = "Keine Verbindung zum Server."; return }
+        guard (resp as? HTTPURLResponse)?.statusCode == 200, FileHash.hex(data) == s.id else {
+            note = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["error"] as? String ?? "Download fehlgeschlagen."
+            return
+        }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let tmp = dir.appendingPathComponent(s.name)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try? data.write(to: tmp)
         let r = library.importItems([tmp])
-        try? FileManager.default.removeItem(at: tmp)
+        try? FileManager.default.removeItem(at: dir)
         note = r.added > 0 ? "„\(s.title)“ in deine Sounds übernommen." : "Konnte nicht übernommen werden."
     }
 
     /// Clan-Session starten oder beitreten → läuft über den normalen Lobby-Kanal.
     func startSession() async {
         busy = true; defer { busy = false }
-        guard case .success(let o) = await account.api("api/clans/\(clanId)/session", method: "POST"),
-              let code = o["code"] as? String else { note = account.problem ?? "Session fehlgeschlagen."; return }
+        let o: [String: Any]
+        switch await account.api("api/clans/\(clanId)/session", method: "POST") {
+        case .success(let r): o = r
+        case .failure(let e): note = e.message; return
+        }
+        guard let code = o["code"] as? String, let ticket = o["ticket"] as? String else { note = "Session fehlgeschlagen."; return }
         if lobby.active { lobby.leave() }
-        if let n = account.user?.name { lobby.name = n }
-        lobby.joinSession(code: code, hostToken: o["hostToken"] as? String)
+        lobby.joinSession(code: code, ticket: ticket)
         sessionCode = code
         note = "Session läuft (Code \(code)). Spielen und beitreten wie in einer Lobby."
     }

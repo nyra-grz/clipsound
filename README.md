@@ -10,6 +10,7 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 | `windows/` | Windows-App (WPF im Windows-11-Design, NAudio) | `dotnet publish windows/ClipSound -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/dist` |
 | `ios/` | iPhone- und iPad-App (SwiftUI) | `cd ios && xcodegen generate`, dann in Xcode öffnen |
 | `server.js`, `public/` | Webseite auf `localhost:3000` | `node server.js` oder `./start.sh` |
+| `cloud/` | Server für Lobbys, Konten und Clans (läuft auf Railway) | `cd cloud && npm ci && node server.js` (braucht `DATABASE_URL`) |
 
 ## Tastenkürzel (Mac und Windows)
 
@@ -27,6 +28,14 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 - Mit **Überlappen** laufen mehrere Sounds gleichzeitig.
 - Die Apps starten leer. Sounds lassen sich einzeln oder als ganzer Ordner importieren, auch per Drag & Drop.
 - Auf dem iPhone liegen die Sounds in der Dateien-App unter *Auf meinem iPhone › ClipSound*.
+
+## Lobbys und Clans
+
+- In einer **Lobby** hört man zusammen: Wer einen Sound drückt, startet ihn bei allen gleichzeitig. Ein Konto braucht man dafür nicht.
+- **Clans** sind feste Gruppen mit Konto, Invite-Code und Admin-Freigabe. Sounds teilt man im Clan, löschen können sie nur Admins.
+- **Der Server speichert keine Audio-Dateien.** In der Datenbank stehen nur Listen (Dateiname, Größe, SHA-256). Braucht jemand einen Sound, bittet der Server ein Gerät, das ihn hat, und reicht die Datei im Arbeitsspeicher direkt weiter. Ein Clan-Sound ist also nur zu haben, solange jemand mit dem Sound ClipSound offen hat.
+- Datenschutzerklärung: `/datenschutz` auf dem Server, in allen Apps verlinkt (Konto-Ansicht, Mac: Hilfe-Menü, Windows: Einstellungen, iPhone: Lobby-Blatt). Das Konto lässt sich in jeder App löschen.
+- Testen: `node cloud/lobby-tool.mjs check <url>` (Lobby) und `DATABASE_URL=… node cloud/lobby-tool.mjs clan-check <url>` (Konten, Clans, Clan-Session).
 
 ## Updates
 

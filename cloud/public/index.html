@@ -216,6 +216,7 @@
   .ask .list { display: flex; flex-direction: column; gap: 6px; }
   .ask .list .btn { justify-content: flex-start; }
   .role { font-size: 12px; color: var(--muted); }
+  .role a, .hint a { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -237,6 +238,7 @@
     <button class="btn btn-upload" id="createBtn">Eigene Lobby öffnen</button>
     <p class="role">Als Host bringst du die Sounds mit. Mit der Mac-, Windows- oder iPhone-App sind das deine eigenen Sounds.</p>
   </div>
+  <p class="role">Der Server speichert keine Sounds. Sie gehen direkt von Gerät zu Gerät. <a href="/datenschutz">Datenschutz</a></p>
 </section>
 
 <!-- Lobby -->
@@ -286,6 +288,7 @@
   <span><kbd>1</kbd>–<kbd>0</kbd> <kbd>Q</kbd>–<kbd>P</kbd> spielen die ersten 20</span>
   <span><kbd>Esc</kbd> stoppt bei allen</span>
   <span id="hintKeep">„Behalten“ fragt den Host, ob du den Sound bekommst</span>
+  <a href="/datenschutz" target="_blank">Datenschutz</a>
 </div>
 </div>
 
@@ -313,7 +316,9 @@ const store = {
 let code = null, hostToken = null, isHost = false, hostName = '', me = null;
 let sounds = [], members = [], ws = null, offset = 0, retry = 0;
 const buffers = new Map(); // id → AudioBuffer (vorgeladen, damit's sofort losgeht)
-const blobs = new Map();   // id → Blob (für „Behalten“)
+const blobs = new Map();   // id → Blob (für „Behalten“ und zum Weitergeben an andere)
+const hostFiles = new Map(); // Host: id → File (der Server speichert nichts, wir schicken auf Anfrage)
+const retries = new Map();   // id → Fehlversuche beim Laden
 const playing = new Set();
 const asks = [];           // offene Fragen an mich
 
@@ -356,12 +361,22 @@ async function preload(s) {
   if (buffers.has(s.id)) return;
   buffers.set(s.id, null);
   try {
-    const blob = await (await fetch(`/api/lobbies/${code}/blobs/${s.id}`)).blob();
-    blobs.set(s.id, blob);
+    let blob = hostFiles.get(s.id); // eigene Datei als Host: nicht über den Server holen
+    if (!blob) {
+      const r = await fetch(`/api/lobbies/${code}/blobs/${s.id}`);
+      if (!r.ok) throw new Error(r.status);
+      blob = await r.blob();
+      blobs.set(s.id, blob);
+      announce(); // ab jetzt kann dieser Browser den Sound auch an andere weitergeben
+    }
     audioOut();
     buffers.set(s.id, await ctx.decodeAudioData(await blob.arrayBuffer()));
   } catch {
     buffers.delete(s.id);
+    // später nochmal, falls das Gerät mit der Datei kurz weg war (höchstens 3-mal)
+    const c = code, n = (retries.get(s.id) || 0) + 1;
+    retries.set(s.id, n);
+    if (n <= 3) setTimeout(() => { if (code === c && sounds.some(x => x.id === s.id)) preload(s); }, 5000);
   }
   grid.querySelector(`[data-id="${s.id}"]`)?.classList.remove('loading');
 }
@@ -403,6 +418,14 @@ function playLocal(id, at, by) {
 // ---------- Verbindung ----------
 function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
 
+// Dem Server sagen, welche Dateien hier liegen – er fragt dann bei Bedarf nach (siehe „send“)
+function announce() { send({ type: 'have', ids: [...(isHost ? hostFiles : blobs).keys()] }); }
+async function serve(msg) {
+  const file = hostFiles.get(msg.id) || blobs.get(msg.id);
+  if (!file) return send({ type: 'nosend', rid: msg.rid });
+  try { await fetch(`/api/relay/${msg.rid}`, { method: 'PUT', body: file }); } catch {}
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const q = new URLSearchParams({ lobby: code, name: myName() });
@@ -412,7 +435,7 @@ function connect() {
   sock.onclose = e => {
     if (sock !== ws) return;
     $('dot').classList.remove('on');
-    const why = { 4404: 'Diese Lobby gibt es nicht (mehr)', 4401: 'Lobby-Zugang ungültig', 4409: 'Die Lobby ist voll',
+    const why = { 4404: 'Diese Lobby gibt es nicht (mehr)', 4401: e.reason || 'Lobby-Zugang ungültig', 4409: 'Die Lobby ist voll',
                   4410: closedReason || 'Die Lobby wurde geschlossen', 4429: 'Zu viele falsche Codes, warte ein paar Minuten' }[e.code];
     if (why) { toast(why, true); leave(); return; }
     if (code) setTimeout(() => code && sock === ws && connect(), Math.min(10000, 500 * 2 ** retry++));
@@ -426,7 +449,7 @@ function handle(msg) {
     case 'hello':
       me = msg.you; isHost = msg.isHost; hostName = msg.host;
       offset = msg.serverTime - Date.now();
-      showRole(); setMembers(msg.members); setSounds(msg.sounds); break;
+      showRole(); setMembers(msg.members); setSounds(msg.sounds); announce(); break;
     case 'sounds': setSounds(msg.sounds); break;
     case 'members': setMembers(msg.members); break;
     case 'play': playLocal(msg.id, msg.at, msg.by); break;
@@ -435,6 +458,7 @@ function handle(msg) {
     case 'asked': case 'offered': asks.push(msg); showAsk(); break;
     case 'answered': answered(msg); break;
     case 'closed': closedReason = msg.reason; break;
+    case 'send': serve(msg); break;
   }
 }
 
@@ -577,7 +601,8 @@ function press(id) {
 
 function stopAll() { stopLocal(); send({ type: 'stop' }); }
 
-// Host im Browser: Dateien hashen, Liste schicken, fehlende hochladen
+// Host im Browser: Dateien hashen und die Liste schicken. Die Dateien bleiben hier im Tab
+// und gehen nur auf Anfrage direkt an die Gäste (der Server speichert sie nicht).
 async function sha256(buf) {
   const h = await crypto.subtle.digest('SHA-256', buf);
   return [...new Uint8Array(h)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -592,17 +617,12 @@ async function addSounds(files) {
     fresh.push({ file: f, id: await sha256(await f.arrayBuffer()), name: f.name, size: f.size });
   }
   if (!fresh.length) return;
-  toast(`Lade ${fresh.length} Sound${fresh.length > 1 ? 's' : ''} hoch…`);
-  const list = [...sounds.map(({ id, name, size }) => ({ id, name, size })), ...fresh.filter(f => !sounds.some(s => s.id === f.id))];
-  const r = await fetch(`/api/lobbies/${code}/sounds`, { method: 'PUT', headers: auth, body: JSON.stringify({ sounds: list.map(({ id, name, size }) => ({ id, name, size })) }) });
-  if (!r.ok) return toast('Hochladen fehlgeschlagen', true);
-  const { missing, skipped } = await r.json();
-  for (const id of missing) {
-    const f = fresh.find(x => x.id === id);
-    if (!f) continue;
-    const up = await fetch(`/api/lobbies/${code}/blobs/${id}`, { method: 'PUT', headers: auth, body: f.file });
-    if (!up.ok) toast(`${f.name}: ${(await up.json().catch(() => ({}))).error || 'Fehler'}`, true);
-  }
+  for (const f of fresh) if (!hostFiles.has(f.id)) hostFiles.set(f.id, f.file);
+  announce();
+  const list = [...hostFiles].map(([id, file]) => ({ id, name: file.name, size: file.size }));
+  const r = await fetch(`/api/lobbies/${code}/sounds`, { method: 'PUT', headers: auth, body: JSON.stringify({ sounds: list }) });
+  if (!r.ok) return toast('Freigeben fehlgeschlagen', true);
+  const { skipped } = await r.json();
   toast(skipped.length ? `${skipped.length} zu groß für die Lobby (max 150 MB)` : 'Sounds sind in der Lobby 🎉', skipped.length > 0);
 }
 
@@ -629,7 +649,7 @@ function leave() {
   code = null; hostToken = null; asks.length = 0; $('ask').hidden = true;
   const old = ws; ws = null; old?.close();
   store.set('host', null, sessionStorage);
-  stopLocal(); buffers.clear(); blobs.clear(); sounds = [];
+  stopLocal(); buffers.clear(); blobs.clear(); hostFiles.clear(); retries.clear(); sounds = [];
   history.replaceState(null, '', '/');
   $('room').hidden = true; $('lobby').hidden = false;
   checkAudio();

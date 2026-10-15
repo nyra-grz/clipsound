@@ -54,6 +54,13 @@ public sealed class AccountWindow : Window
         var b = new Button { Content = t, Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
         b.Click += h; return b;
     }
+    /// <summary>Kleiner Link zur Datenschutzerklärung (öffnet den Browser)</summary>
+    public static TextBlock PrivacyLink(string text = "Datenschutzerklärung")
+    {
+        var link = new System.Windows.Documents.Hyperlink(new System.Windows.Documents.Run(text)) { NavigateUri = Account.PrivacyUrl };
+        link.RequestNavigate += (_, _) => Relay.OpenInBrowser(Account.PrivacyUrl);
+        return new TextBlock(link) { Margin = new Thickness(0, 14, 0, 0) };
+    }
 
     // ---------- Anmelden / Registrieren / Bestätigen ----------
     private int _mode;          // 0 = Login, 1 = Register, 2 = Verify
@@ -124,6 +131,8 @@ public sealed class AccountWindow : Window
             }
         }));
         _root.Children.Add(status);
+        _root.Children.Add(Muted("Mit einem Konto gilt die Datenschutzerklärung. Deine Sounds bleiben auf deinen Geräten."));
+        _root.Children.Add(PrivacyLink());
     }
 
     // ---------- Konto + Clans ----------
@@ -178,6 +187,25 @@ public sealed class AccountWindow : Window
             if (st is not null) joinBox.Text = "";
         }));
         _root.Children.Add(note);
+
+        // Datenschutz: Erklärung und Konto löschen (DSGVO Art. 17)
+        _root.Children.Add(PrivacyLink());
+        _root.Children.Add(new TextBlock { Text = "Konto löschen", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 18, 0, 2) });
+        _root.Children.Add(Muted("Löscht E-Mail, Name, Passwort und Mitgliedschaften. Clans, die dir gehören, übernimmt ein anderes Mitglied; bist du allein drin, wird der Clan aufgelöst."));
+        _root.Children.Add(Caption("Passwort zur Bestätigung"));
+        var delPw = new PasswordBox();
+        _root.Children.Add(delPw);
+        var delStatus = new TextBlock { Foreground = Brushes.OrangeRed, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
+        var del = Btn("Konto endgültig löschen", async (_, _) =>
+        {
+            if (delPw.Password.Length == 0) { delStatus.Text = "Bitte dein Passwort eingeben."; return; }
+            if (MessageBox.Show(this, "Konto wirklich löschen? Das kann man nicht rückgängig machen.", "Konto löschen",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+            if (!await _account.DeleteAccountAsync(delPw.Password)) delStatus.Text = _account.Problem ?? "Löschen fehlgeschlagen.";
+        });
+        del.Foreground = Brushes.OrangeRed;
+        _root.Children.Add(del);
+        _root.Children.Add(delStatus);
     }
 
     // ---------- Clan-Seite (eigenes Fenster) ----------
@@ -249,23 +277,45 @@ public sealed class ClanWindow : Window
 
         // Clan-Sounds
         _root.Children.Add(new TextBlock { Text = $"Clan-Sounds ({_room.Sounds.Count})", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 16, 0, 4) });
-        if (_room.Sounds.Count == 0) _root.Children.Add(Muted("Noch keine Sounds im Clan. Lade welche aus deiner Bibliothek hoch."));
+        if (_room.Sounds.Count == 0) _root.Children.Add(Muted("Noch keine Sounds im Clan. Teile welche aus deiner Bibliothek."));
         foreach (var s in _room.Sounds)
         {
             var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-            var take = new Button { Content = "In meine Sounds", Margin = new Thickness(6, 0, 0, 0) };
             var snd = s;
+            if (_room.IsAdmin)
+            {
+                var del = new Button { Content = "Löschen", Margin = new Thickness(6, 0, 0, 0), ToolTip = "Aus dem Clan löschen (nur Admins)" };
+                del.Click += async (_, _) =>
+                {
+                    if (MessageBox.Show(this, $"„{snd.Title}“ aus dem Clan löschen? Er verschwindet für alle im Clan.", "Clan-Sound löschen",
+                            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes)
+                        await _room.DeleteSoundAsync(snd);
+                };
+                DockPanel.SetDock(del, Dock.Right); row.Children.Add(del);
+            }
+            var take = new Button { Content = "In meine Sounds", Margin = new Thickness(6, 0, 0, 0), IsEnabled = s.Available };
             take.Click += async (_, _) => await _room.TakeToSoloAsync(snd);
             DockPanel.SetDock(take, Dock.Right); row.Children.Add(take);
-            row.Children.Add(new TextBlock { Text = s.Title, VerticalAlignment = VerticalAlignment.Center });
+            var title = new TextBlock
+            {
+                Text = s.Available ? s.Title : $"{s.Title}  (niemand online, der ihn hat)",
+                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            if (!s.Available) title.Foreground = Brushes.Gray;
+            row.Children.Add(title);
             _root.Children.Add(row);
         }
-        _root.Children.Add(Btn("Sounds in den Clan laden…", (_, _) =>
+        _root.Children.Add(Btn("Sounds im Clan teilen…", (_, _) =>
         {
-            var dlg = new OpenFileDialog { Multiselect = true, Filter = "Audio|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.aif;*.aiff;*.caf;*.webm|Alle Dateien|*.*" };
+            var dlg = new OpenFileDialog
+            {
+                Multiselect = true, InitialDirectory = _room.LibraryFolder,
+                Filter = "Audio|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.aif;*.aiff;*.caf;*.webm|Alle Dateien|*.*",
+            };
             if (dlg.ShowDialog() == true)
-                _ = _room.UploadAsync(dlg.FileNames.Select(f => new Sound(f)));
+                _ = _room.ShareAsync(dlg.FileNames);
         }));
+        _root.Children.Add(Muted("Die Sounds bleiben auf euren Geräten und gehen direkt von einem zum anderen. Der Server speichert keine Dateien."));
 
         // Admin: Invite-Code versteckt (3× auf „Admin“ klicken)
         if (_room.IsAdmin)

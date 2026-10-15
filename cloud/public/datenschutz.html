@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Datenschutz – ClipSound</title>
+<style>
+  :root { --bg: #0c0e16; --panel: rgba(255,255,255,.05); --text: #f4f5fa; --muted: #8a8fa6; --line: rgba(255,255,255,.09); --accent: #ffc371; }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text);
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: radial-gradient(900px 500px at 10% -10%, rgba(255,95,109,.14), transparent 60%), var(--bg);
+  }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 16px 80px; }
+  h1 { font-size: 30px; line-height: 1.2; margin: 0 0 6px; letter-spacing: -.02em; }
+  h2 { font-size: 20px; margin: 40px 0 10px; letter-spacing: -.01em; }
+  h3 { font-size: 16px; margin: 24px 0 6px; }
+  p, li { color: #d5d8e6; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  a { color: var(--accent); }
+  .stand { color: var(--muted); font-size: 14px; margin: 0 0 24px; }
+  .kurz { padding: 16px 20px; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); }
+  .kurz ul { margin: 8px 0 0; }
+  .back { display: inline-block; margin-bottom: 24px; color: var(--muted); text-decoration: none; font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+<a class="back" href="/">← ClipSound</a>
+<h1>Datenschutzerklärung für ClipSound</h1>
+<p class="stand">Gilt für die Mac-, Windows- und iPhone-App und die Web-Version. Stand: 15. Oktober 2026</p>
+
+<div class="kurz">
+  <b>Kurz gesagt</b>
+  <ul>
+    <li>Deine Sounds bleiben auf deinen Geräten. Der ClipSound-Server speichert keine Audio-Dateien.</li>
+    <li>Braucht jemand einen Sound, schickt ihn ein Gerät, auf dem er schon liegt. Der Server reicht ihn nur durch.</li>
+    <li>Keine Werbung, kein Tracking, keine Analyse-Tools, keine Cookies.</li>
+    <li>Für Lobbys brauchst du kein Konto. Ein Konto brauchst du nur für Clans.</li>
+    <li>Dein Konto kannst du jederzeit in der App löschen.</li>
+  </ul>
+</div>
+
+<h2>Wer ist verantwortlich?</h2>
+<p>Daniel Özdek, Österreich<br>E-Mail: <a href="mailto:office@oezdek.com">office@oezdek.com</a></p>
+<p>Wenn du Fragen zum Datenschutz hast oder eines deiner Rechte nutzen willst, schreib an diese Adresse.</p>
+
+<h2>Was ClipSound verarbeitet</h2>
+
+<h3>Auf deinem Gerät</h3>
+<p>Deine Sound-Bibliothek liegt nur auf deinem Gerät: am Mac und unter Windows im Ordner „Sounds“ auf dem Schreibtisch, am iPhone in der Dateien-App unter „ClipSound“. Ebenfalls nur auf dem Gerät liegen Tastenkürzel, Einstellungen, dein Lobby-Name und, wenn du angemeldet bist, dein Anmelde-Schlüssel.</p>
+
+<h3>Lobbys (ohne Konto)</h3>
+<p>Wenn du eine Lobby öffnest oder einer beitrittst, verarbeitet der Server:</p>
+<ul>
+  <li>den Namen, den du eingibst (die anderen in der Lobby sehen ihn),</li>
+  <li>den Lobby-Code,</li>
+  <li>die Liste der Sounds, die der Host teilt: Dateiname, Größe und eine Prüfsumme (SHA-256),</li>
+  <li>welche dieser Sounds auf welchem verbundenen Gerät liegen (nur die Prüfsummen),</li>
+  <li>wer welchen Sound abspielt oder stoppt und die Lautstärke, die deine App meldet.</li>
+</ul>
+<p>Code und Soundliste stehen in der Datenbank, bis die Lobby geschlossen wird. Das passiert spätestens eine Minute, nachdem der Host gegangen ist. Alles andere hält der Server nur im Arbeitsspeicher, solange du verbunden bist.</p>
+<p>Als Gast lädt deine App die Sounds der Lobby in einen Zwischenspeicher auf deinem Gerät, damit sie sofort abspielbar sind. Beim Verlassen der Lobby wird er gelöscht. Behalten kannst du einen Sound nur, wenn der Host zustimmt.</p>
+
+<h3>Konto und Clans</h3>
+<ul>
+  <li>E-Mail-Adresse, Name und Passwort. Das Passwort wird nur als scrypt-Hash gespeichert, nie im Klartext.</li>
+  <li>Ein Bestätigungscode für deine E-Mail-Adresse. Er gilt 15 Minuten.</li>
+  <li>Die Anmelde-Schlüssel deiner Geräte, gespeichert nur als Hash. Beim Abmelden wird der Schlüssel gelöscht.</li>
+  <li>Deine Clans, deine Rolle (Admin oder Mitglied) und Beitrittsanfragen. Die Admins eines Clans sehen Name und E-Mail-Adresse von Personen, die beitreten wollen.</li>
+  <li>Die Liste der Clan-Sounds: Dateiname, Größe, Prüfsumme und wer den Sound geteilt hat.</li>
+</ul>
+<p>Solange du in der App angemeldet bist, hält sie eine Verbindung zum Server. Darüber meldet sie, welche Clan-Sounds auf deinem Gerät liegen, und schickt einen davon, wenn ein anderes Mitglied deines Clans ihn braucht. Die App sucht dafür nur in ihrem eigenen Sound-Ordner und nur nach Sounds, die schon in einem deiner Clans geteilt wurden. Gemeldet werden nur Prüfsummen.</p>
+
+<h3>Wie Sounds weitergegeben werden</h3>
+<p>Der Server speichert keine Audio-Dateien. Braucht jemand einen Sound, fragt der Server ein Gerät in der Lobby oder im Clan, auf dem er liegt. Dieses Gerät schickt die Datei an den Server. Der reicht sie im Arbeitsspeicher direkt an die Person weiter, die sie angefragt hat, und verwirft sie danach. Ist gerade niemand online, der den Sound hat, kann ihn niemand laden.</p>
+
+<h3>IP-Adresse und Verbindungsdaten</h3>
+<p>Für jede Verbindung ist deine IP-Adresse technisch nötig. ClipSound speichert sie nicht in der Datenbank. Gibt jemand mehrmals falsche Lobby-Codes ein oder lädt sehr viele Sounds, merkt sich der Server die IP-Adresse höchstens 10 Minuten im Arbeitsspeicher, um Missbrauch zu bremsen. Der Hoster Railway erstellt technische Protokolle (zum Beispiel IP-Adresse, Zeitpunkt und aufgerufene Adresse), die er nach kurzer Zeit löscht.</p>
+
+<h3>E-Mails</h3>
+<p>Die Bestätigungscodes verschickt ClipSound über den Dienst Resend. Resend bekommt dafür deine E-Mail-Adresse und den Code. Andere E-Mails wie Newsletter oder Werbung gibt es nicht.</p>
+
+<h3>Updates</h3>
+<p>Die Mac- und die Windows-App fragen beim Start bei GitHub nach, ob es eine neue Version gibt, und laden Updates von dort. GitHub sieht dabei deine IP-Adresse. Dafür gilt die Datenschutzerklärung von GitHub.</p>
+
+<h3>Web-Version</h3>
+<p>Die Web-Version merkt sich in deinem Browser (localStorage) deinen Namen, die Lautstärke und die Einstellung „Überlappen“. Als Host merkt sie sich für die Dauer des Tabs, dass du der Host bist (sessionStorage). Diese Daten bleiben in deinem Browser.</p>
+
+<h2>Dienstleister</h2>
+<ul>
+  <li><b>Railway</b> (Railway Corporation, USA): Server und Datenbank. Das Rechenzentrum steht in den Niederlanden (EU).</li>
+  <li><b>Resend</b> (USA): Versand der Bestätigungscodes.</li>
+</ul>
+<p>Mit beiden gibt es einen Auftragsverarbeitungsvertrag. Weil beide Unternehmen in den USA sitzen, stützt sich die Übermittlung auf das EU-US Data Privacy Framework (Art. 45 DSGVO) und die Standardvertragsklauseln der EU-Kommission (Art. 46 DSGVO).</p>
+
+<h2>Rechtsgrundlagen</h2>
+<ul>
+  <li>Art. 6 Abs. 1 lit. b DSGVO: um dir Lobbys, dein Konto und Clans bereitzustellen.</li>
+  <li>Art. 6 Abs. 1 lit. f DSGVO: um Missbrauch zu verhindern (Sperre bei falschen Codes, Grenzen für Downloads) und um nach Updates zu suchen.</li>
+</ul>
+
+<h2>Wie lange Daten bleiben</h2>
+<ul>
+  <li>Lobby-Daten: bis die Lobby geschlossen ist</li>
+  <li>Konto und Clans: bis du dein Konto löschst</li>
+  <li>Bestätigungscodes: 15 Minuten</li>
+  <li>IP-Adressen beim ClipSound-Server: höchstens 10 Minuten im Arbeitsspeicher</li>
+</ul>
+
+<h2>Konto löschen</h2>
+<p>In der App unter „Konto &amp; Clans“ → „Konto löschen“, zur Sicherheit mit deinem Passwort. Gelöscht werden dann E-Mail-Adresse, Name, Passwort-Hash, Anmelde-Schlüssel, Mitgliedschaften und Beitrittsanfragen. Sounds, die du in einen Clan geteilt hast, bleiben in der Liste des Clans, aber ohne deinen Namen. Clans, die dir gehören, übernimmt ein anderes Mitglied, zuerst ein Admin. Bist du allein im Clan, wird er aufgelöst.</p>
+<p>Ohne App geht es per E-Mail an <a href="mailto:office@oezdek.com">office@oezdek.com</a>.</p>
+
+<h2>Deine Rechte</h2>
+<p>Du hast das Recht auf Auskunft (Art. 15 DSGVO), Berichtigung (Art. 16), Löschung (Art. 17), Einschränkung der Verarbeitung (Art. 18), Datenübertragbarkeit (Art. 20) und Widerspruch (Art. 21). Schreib dafür an <a href="mailto:office@oezdek.com">office@oezdek.com</a>.</p>
+<p>Wenn du meinst, dass mit deinen Daten etwas nicht stimmt, kannst du dich bei der Österreichischen Datenschutzbehörde beschweren: Barichgasse 40–42, 1030 Wien, <a href="https://www.dsb.gv.at">dsb.gv.at</a>.</p>
+
+<h2>Alter</h2>
+<p>Ein Konto ist für Personen ab 14 Jahren gedacht.</p>
+
+<h2>Änderungen</h2>
+<p>Wenn sich ClipSound ändert, passe ich diese Erklärung an. Das Datum oben zeigt den aktuellen Stand.</p>
+</main>
+</body>
+</html>

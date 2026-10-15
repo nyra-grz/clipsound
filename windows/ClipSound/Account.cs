@@ -1,7 +1,6 @@
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -11,12 +10,14 @@ namespace ClipSound;
 
 // Konto + Clans gegen den ClipSound-Server (cloud/clans.js) – gleiche API wie Mac/iOS.
 // Solo-Modus läuft weiter über Lobby.cs, ganz ohne Konto.
+// Clan-Sounds liegen nicht auf dem Server, sondern auf den Geräten der Mitglieder (siehe Share.cs).
 
 public sealed record AccountUser(string Id, string Email, string Name);
 public sealed record ClanSummary(string Id, string Name, string Role, int Members) { public bool IsAdmin => Role == "admin"; }
 public sealed record ClanMember(string Id, string Name, string Role);
 public sealed record ClanRequest(string UserId, string Name, string Email);
-public sealed record ClanSound(string Id, string Name, long Size)
+/// <param name="Available">Gerade ist jemand online, der ihn auf dem Gerät hat</param>
+public sealed record ClanSound(string Id, string Name, long Size, bool Available = true)
 {
     public string Title => Regex.Replace(Path.GetFileNameWithoutExtension(Name), "[-_]+", " ");
 }
@@ -32,10 +33,24 @@ public sealed class Account
             : new Uri(env.TrimEnd('/') + "/");
     }
 
+    /// <summary>Datenschutzerklärung (gilt für alle Versionen)</summary>
+    public static Uri PrivacyUrl => new(Server, "datenschutz");
+
     private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(60) };
     private readonly string _tokenFile;
+    /// <summary>Gibt Clan-Sounds aus der eigenen Bibliothek an andere Mitglieder weiter, solange man angemeldet ist.</summary>
+    public ClanShare Share { get; } = new(Server);
 
-    public string? Token { get; private set; }
+    private string? _token;
+    public string? Token
+    {
+        get => _token;
+        private set
+        {
+            _token = value;
+            if (string.IsNullOrEmpty(value)) Share.Stop(); else Share.Start(value);
+        }
+    }
     public AccountUser? User { get; private set; }
     public List<ClanSummary> Clans { get; private set; } = new();
     public bool LoggedIn => User is not null;
@@ -48,6 +63,13 @@ public sealed class Account
         _tokenFile = tokenFile;
         try { if (File.Exists(_tokenFile)) Token = File.ReadAllText(_tokenFile).Trim(); } catch { }
         if (!string.IsNullOrEmpty(Token)) _ = RefreshMeAsync();
+    }
+
+    /// <summary>Die eigene Bibliothek für Clans bereitstellen (die App ruft das einmal auf).</summary>
+    public void Attach(SoundLibrary library)
+    {
+        library.Changed += () => Share.FilesChanged(library.Sounds.Select(s => s.Path));
+        Share.FilesChanged(library.Sounds.Select(s => s.Path));
     }
 
     private void SaveToken() { try { if (string.IsNullOrEmpty(Token)) File.Delete(_tokenFile); else File.WriteAllText(_tokenFile, Token); } catch { } }
@@ -117,7 +139,29 @@ public sealed class Account
         return (false, err is not null && err.ToLowerInvariant().Contains("bestätig"));
     }
 
-    public void Logout() { Token = null; User = null; Clans = new(); SaveToken(); Notify(); }
+    public void Logout()
+    {
+        // Den Schlüssel auch auf dem Server ungültig machen
+        if (!string.IsNullOrEmpty(Token))
+        {
+            var req = new HttpRequestMessage(HttpMethod.Post, new Uri(Server, "api/account/logout"));
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", Token);
+            _ = _http.SendAsync(req).ContinueWith(_ => { });
+        }
+        Token = null; User = null; Clans = new(); SaveToken(); Notify();
+    }
+
+    /// <summary>Konto mit allen Daten löschen (DSGVO Art. 17). Braucht das Passwort.</summary>
+    public async Task<bool> DeleteAccountAsync(string password)
+    {
+        Busy = true; Problem = null; Notify();
+        var (_, err) = await ApiAsync("api/account/delete", HttpMethod.Post, new { password });
+        Busy = false;
+        if (err is null) { Token = null; User = null; Clans = new(); SaveToken(); }
+        else Problem = err;
+        Notify();
+        return err is null;
+    }
 
     public async Task RefreshMeAsync()
     {
@@ -165,6 +209,7 @@ public sealed class ClanRoom
     public List<ClanSound> Sounds { get; private set; } = new();
     public string? Note { get; set; }
     public bool IsAdmin => Role == "admin";
+    public string LibraryFolder => _library.Folder;
     public event Action? Changed;
 
     public ClanRoom(Account account, Lobby lobby, SoundLibrary library, string clanId, string name)
@@ -198,7 +243,7 @@ public sealed class ClanRoom
         var (so, _) = await _account.ApiAsync($"api/clans/{ClanId}/sounds");
         Sounds = new();
         if (so?["sounds"] is JsonArray sa)
-            foreach (var s in sa) if (s is not null) Sounds.Add(new ClanSound((string?)s["id"] ?? "", (string?)s["name"] ?? "", (long?)s["size"] ?? 0));
+            foreach (var s in sa) if (s is not null) Sounds.Add(new ClanSound((string?)s["id"] ?? "", (string?)s["name"] ?? "", (long?)s["size"] ?? 0, (bool?)s["available"] ?? true));
         Notify();
     }
 
@@ -216,43 +261,47 @@ public sealed class ClanRoom
         Notify();
     }
 
-    /// <summary>Lokale Sounds in die Clan-Bibliothek laden.</summary>
-    public async Task UploadAsync(IEnumerable<Sound> files)
+    /// <summary>
+    /// Eigene Sounds im Clan teilen. Hochgeladen wird nichts: Die Dateien bleiben auf diesem PC und gehen
+    /// direkt an die anderen, wenn jemand sie braucht. Dateien von außerhalb kommen dafür in die eigene Bibliothek.
+    /// </summary>
+    public async Task ShareAsync(IEnumerable<string> paths)
     {
-        var meta = new List<object>();
-        var byId = new Dictionary<string, byte[]>();
-        foreach (var s in files)
+        var picked = paths.ToList();
+        var libraryFiles = _library.Sounds.Select(s => s.Path).ToList();
+        var (meta, outside) = await Task.Run(() =>
         {
-            byte[] data;
-            try { data = await File.ReadAllBytesAsync(s.Path); } catch { continue; }
-            var sha = Convert.ToHexString(SHA256.HashData(data)).ToLowerInvariant();
-            meta.Add(new { id = sha, name = Path.GetFileName(s.Path), size = data.Length });
-            byId[sha] = data;
-        }
-        if (meta.Count == 0) return;
-        var (obj, err) = await _account.ApiAsync($"api/clans/{ClanId}/sounds", HttpMethod.Post, new { sounds = meta });
-        if (err is not null) { Note = err; Notify(); return; }
-        if (obj?["missing"] is JsonArray miss)
-            foreach (var idNode in miss)
+            var inLibrary = libraryFiles.Select(Path.GetFullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var meta = new List<object>();
+            var outside = new List<(string Path, string Sha)>();
+            foreach (var p in picked)
             {
-                var id = (string?)idNode;
-                if (id is not null && byId.TryGetValue(id, out var data)) await PutBlobAsync(id, data);
+                if (FileHash.Sha256(p) is not { } sha) continue;
+                meta.Add(new { id = sha, name = Path.GetFileName(p), size = new FileInfo(p).Length });
+                if (!inLibrary.Contains(Path.GetFullPath(p))) outside.Add((p, sha));
             }
+            // Was es (mit gleichem Inhalt) schon in der Bibliothek gibt, nicht doppelt anlegen
+            var known = outside.Count == 0 ? new HashSet<string>() : libraryFiles.Select(FileHash.Sha256).OfType<string>().ToHashSet();
+            return (meta, outside.Where(o => !known.Contains(o.Sha)).Select(o => o.Path).ToList());
+        });
+        if (outside.Count > 0) _library.Import(outside);
+        if (meta.Count == 0) { Note = "Keine Sounds gefunden."; Notify(); return; }
+        var (obj, err) = await _account.ApiAsync($"api/clans/{ClanId}/sounds", HttpMethod.Post, new { sounds = meta });
+        var skipped = obj?["skipped"]?.AsArray().Count ?? 0;
+        Note = err ?? (skipped > 0 ? $"{skipped} Sound(s) zu groß für den Clan (max. 15 MB pro Sound, 150 MB gesamt)."
+            : "Geteilt. Die anderen bekommen die Sounds direkt von deinem PC, solange ClipSound bei dir läuft.");
         await LoadAsync();
-        Note = "In den Clan geladen.";
-        Notify();
     }
 
-    private async Task PutBlobAsync(string id, byte[] data)
+    /// <summary>Clan-Sound löschen (nur Admins).</summary>
+    public async Task DeleteSoundAsync(ClanSound s)
     {
-        var req = new HttpRequestMessage(HttpMethod.Put, new Uri(Account.Server, $"api/clans/{ClanId}/blobs/{id}"));
-        if (!string.IsNullOrEmpty(_account.Token)) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _account.Token);
-        req.Content = new ByteArrayContent(data);
-        req.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        try { using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(60) }; await h.SendAsync(req); } catch { }
+        var (_, err) = await _account.ApiAsync($"api/clans/{ClanId}/sounds/{s.Id}", HttpMethod.Delete);
+        Note = err ?? $"„{s.Title}“ aus dem Clan gelöscht.";
+        await LoadAsync();
     }
 
-    /// <summary>Clan-Sound in die eigenen (Solo-)Sounds übernehmen.</summary>
+    /// <summary>Clan-Sound in die eigenen (Solo-)Sounds übernehmen – kommt direkt vom Gerät eines Mitglieds.</summary>
     public async Task TakeToSoloAsync(ClanSound s)
     {
         var req = new HttpRequestMessage(HttpMethod.Get, new Uri(Account.Server, $"api/clans/{ClanId}/blobs/{s.Id}"));
@@ -261,15 +310,24 @@ public sealed class ClanRoom
         {
             using var h = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             var resp = await h.SendAsync(req);
-            if (!resp.IsSuccessStatusCode) { Note = "Download fehlgeschlagen."; Notify(); return; }
             var data = await resp.Content.ReadAsByteArrayAsync();
-            var tmp = Path.Combine(Path.GetTempPath(), s.Name);
+            if (!resp.IsSuccessStatusCode || FileHash.Hex(data) != s.Id)
+            {
+                string? why = null;
+                try { why = (string?)JsonNode.Parse(data)?["error"]; } catch { }
+                Note = why ?? "Download fehlgeschlagen.";
+                Notify();
+                return;
+            }
+            var dir = Path.Combine(Path.GetTempPath(), "ClipSound-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(dir);
+            var tmp = Path.Combine(dir, s.Name);
             await File.WriteAllBytesAsync(tmp, data);
             var r = _library.Import(new[] { tmp });
-            try { File.Delete(tmp); } catch { }
+            try { Directory.Delete(dir, true); } catch { }
             Note = r.Added > 0 ? $"„{s.Title}“ in deine Sounds übernommen." : "Konnte nicht übernommen werden.";
         }
-        catch { Note = "Download fehlgeschlagen."; }
+        catch { Note = "Keine Verbindung zum Server."; }
         Notify();
     }
 
@@ -279,9 +337,10 @@ public sealed class ClanRoom
         var (obj, err) = await _account.ApiAsync($"api/clans/{ClanId}/session", HttpMethod.Post);
         if (err is not null || obj is null) { Note = err ?? "Session fehlgeschlagen."; Notify(); return; }
         var code = (string?)obj["code"];
-        if (code is null) return;
+        var ticket = (string?)obj["ticket"];
+        if (code is null || ticket is null) { Note = "Session fehlgeschlagen."; Notify(); return; }
         if (_lobby.Active) _lobby.Leave();
-        _lobby.JoinSession(code, (string?)obj["hostToken"], _account.User?.Name ?? "Clan");
+        _lobby.JoinSession(code, ticket, _account.User?.Name ?? "Clan");
         SessionCode = code;
         Note = $"Session läuft (Code {code}).";
         Notify();

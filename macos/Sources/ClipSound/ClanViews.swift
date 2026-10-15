@@ -4,6 +4,7 @@ import AppKit
 /// Clan-Seite – übersichtlich in Karten statt Formular.
 struct ClanPage: View {
     @StateObject private var room: ClanRoom
+    @State private var pendingDelete: ClanSound?
 
     init(account: Account, lobby: Lobby, library: SoundLibrary, clan: ClanSummary) {
         _room = StateObject(wrappedValue: ClanRoom(account: account, lobby: lobby, library: library, clanId: clan.id, name: clan.name))
@@ -72,23 +73,33 @@ struct ClanPage: View {
                         Text("\(room.sounds.count)").foregroundStyle(.secondary).monospacedDigit()
                     }
                     if room.sounds.isEmpty {
-                        Text("Noch keine Sounds im Clan. Lade welche aus deiner Bibliothek hoch.").foregroundStyle(.secondary)
+                        Text("Noch keine Sounds im Clan. Teile welche aus deiner Bibliothek.").foregroundStyle(.secondary)
                     }
                     ForEach(room.sounds) { s in
                         HStack(spacing: 10) {
                             Image(systemName: "waveform").foregroundStyle(.secondary)
-                            Text(s.title)
+                            Text(s.title).foregroundStyle(s.available ? .primary : .secondary)
+                            if !s.available {
+                                Text("niemand online, der ihn hat").font(.caption).foregroundStyle(.tertiary)
+                            }
                             Spacer()
                             Button { Task { await room.takeToSolo(s) } } label: { Image(systemName: "square.and.arrow.down") }
                                 .buttonStyle(.borderless).help("In deine eigenen Sounds übernehmen")
+                                .disabled(!s.available || room.busy)
+                            if room.isAdmin {
+                                Button { pendingDelete = s } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.borderless).foregroundStyle(.red).help("Aus dem Clan löschen (nur Admins)")
+                            }
                         }
                         .padding(.vertical, 2)
                     }
-                    Button { Task { await room.upload(pickSounds()) } } label: {
-                        Label("Sounds in den Clan laden…", systemImage: "square.and.arrow.up")
+                    Button { Task { await room.share(pickSounds()) } } label: {
+                        Label("Sounds im Clan teilen…", systemImage: "square.and.arrow.up")
                     }
                     .disabled(room.busy)
                     .padding(.top, 2)
+                    Text("Die Sounds bleiben auf euren Geräten und gehen direkt von einem zum anderen. Der Server speichert keine Dateien.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 .clanCard()
 
@@ -102,16 +113,26 @@ struct ClanPage: View {
         }
         .navigationTitle(room.name)
         .task { await room.load() }
+        .confirmationDialog("„\(pendingDelete?.title ?? "")“ aus dem Clan löschen?", isPresented: deleteShown, presenting: pendingDelete) { s in
+            Button("Löschen", role: .destructive) { Task { await room.delete(s) } }
+        } message: { _ in
+            Text("Der Sound verschwindet für alle im Clan. Wer ihn schon in seine eigenen Sounds übernommen hat, behält ihn.")
+        }
     }
 
-    private func pickSounds() -> [Sound] {
+    private var deleteShown: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+    }
+
+    private func pickSounds() -> [URL] {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.audio]
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.message = "Sounds für den Clan auswählen"
+        panel.directoryURL = room.library.folder
+        panel.message = "Sounds zum Teilen auswählen – sie bleiben auf deinem Mac"
         guard panel.runModal() == .OK else { return [] }
-        return panel.urls.map { Sound(url: $0) }
+        return panel.urls
     }
 }
 

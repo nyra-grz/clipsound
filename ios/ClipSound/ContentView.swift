@@ -122,6 +122,7 @@ struct ContentView: View {
         } message: { Text($0) }
         .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
         .onAppear { if ProcessInfo.processInfo.arguments.contains("--open-account") { showAccount = true } }
+        .onAppear { account.attach(library) } // Clan-Sounds von diesem iPhone aus weitergeben
     }
 
     private var grid: some View {

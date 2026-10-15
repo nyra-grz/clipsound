@@ -21,11 +21,13 @@ targets:
       - path: ../macos/Sources/ClipSound/Lobby.swift
       # Konto & Clans – gleiches Modell wie am Mac
       - path: ../macos/Sources/ClipSound/Account.swift
+      # Sounds von Gerät zu Gerät (der Server speichert keine Dateien)
+      - path: ../macos/Sources/ClipSound/Share.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound
-        MARKETING_VERSION: "1.2"
-        CURRENT_PROJECT_VERSION: 2
+        MARKETING_VERSION: "1.3"
+        CURRENT_PROJECT_VERSION: 3
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic

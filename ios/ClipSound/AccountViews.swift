@@ -123,6 +123,8 @@ private struct AccountAuth: View {
                     }
                 }
                 .clanCard()
+                Text("Mit einem Konto gilt die [Datenschutzerklärung](\(Account.privacyURL.absoluteString)). Deine Sounds bleiben auf deinen Geräten.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
             }
             .padding(20)
         }
@@ -138,6 +140,8 @@ private struct AccountHome: View {
     @State private var newClan = ""
     @State private var joinCode = ""
     @State private var note: String?
+    @State private var confirmDelete = false
+    @State private var password = ""
 
     var body: some View {
         ScrollView {
@@ -194,10 +198,28 @@ private struct AccountHome: View {
 
                 if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
                 if let p = account.problem { Label(p, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout) }
+
+                // Datenschutz
+                HStack {
+                    Link("Datenschutzerklärung", destination: Account.privacyURL)
+                    Spacer()
+                    Button("Konto löschen …", role: .destructive) { password = ""; confirmDelete = true }
+                }
+                .font(.callout)
+                .padding(.top, 8)
             }
             .padding(20)
         }
         .task { await account.refreshMe() }
+        .alert("Konto wirklich löschen?", isPresented: $confirmDelete) {
+            SecureField("Passwort", text: $password)
+            Button("Endgültig löschen", role: .destructive) {
+                Task { _ = await account.deleteAccount(password: password) }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("E-Mail, Name, Passwort und Mitgliedschaften werden gelöscht. Clans, die dir gehören, übernimmt ein anderes Mitglied; bist du allein drin, wird der Clan aufgelöst. Das kann man nicht rückgängig machen.")
+        }
     }
 }
 
@@ -224,6 +246,7 @@ struct ClanRow: View {
 struct ClanPage: View {
     @StateObject private var room: ClanRoom
     @State private var importing = false
+    @State private var pendingDelete: ClanSound?
 
     init(account: Account, lobby: Lobby, library: SoundLibrary, clan: ClanSummary) {
         _room = StateObject(wrappedValue: ClanRoom(account: account, lobby: lobby, library: library, clanId: clan.id, name: clan.name))
@@ -280,19 +303,28 @@ struct ClanPage: View {
                         Spacer()
                         Text("\(room.sounds.count)").foregroundStyle(.secondary).monospacedDigit()
                     }
-                    if room.sounds.isEmpty { Text("Noch keine Sounds im Clan. Lade welche hoch.").foregroundStyle(.secondary) }
+                    if room.sounds.isEmpty { Text("Noch keine Sounds im Clan. Teile welche aus deinen Sounds.").foregroundStyle(.secondary) }
                     ForEach(room.sounds) { s in
                         HStack(spacing: 10) {
                             Image(systemName: "waveform").foregroundStyle(.secondary)
-                            Text(s.title)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(s.title).foregroundStyle(s.available ? .primary : .secondary)
+                                if !s.available { Text("niemand online, der ihn hat").font(.caption2).foregroundStyle(.tertiary) }
+                            }
                             Spacer()
                             Button { Task { await room.takeToSolo(s) } } label: { Image(systemName: "square.and.arrow.down") }
-                                .buttonStyle(.borderless)
+                                .buttonStyle(.borderless).disabled(!s.available || room.busy)
+                            if room.isAdmin {
+                                Button { pendingDelete = s } label: { Image(systemName: "trash") }
+                                    .buttonStyle(.borderless).tint(.red)
+                            }
                         }
                         .padding(.vertical, 2)
                     }
-                    Button { importing = true } label: { Label("Sounds in den Clan laden…", systemImage: "square.and.arrow.up") }
+                    Button { importing = true } label: { Label("Sounds im Clan teilen…", systemImage: "square.and.arrow.up") }
                         .disabled(room.busy)
+                    Text("Die Sounds bleiben auf euren Geräten und gehen direkt von einem zum anderen. Der Server speichert keine Dateien.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }.clanCard()
 
                 ClanMembers(room: room)
@@ -307,17 +339,34 @@ struct ClanPage: View {
         .navigationBarTitleDisplayMode(.inline)
         .fileImporter(isPresented: $importing, allowedContentTypes: [.audio], allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
-            var temps: [Sound] = []
+            // Kopien, weil die Originale nur kurz lesbar sind; was neu ist, landet in den eigenen Sounds
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            var temps: [URL] = []
             for u in urls {
                 let scoped = u.startAccessingSecurityScopedResource()
                 defer { if scoped { u.stopAccessingSecurityScopedResource() } }
-                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(u.lastPathComponent)
-                try? FileManager.default.removeItem(at: tmp)
-                if (try? FileManager.default.copyItem(at: u, to: tmp)) != nil { temps.append(Sound(url: tmp)) }
+                let tmp = dir.appendingPathComponent(u.lastPathComponent)
+                if (try? FileManager.default.copyItem(at: u, to: tmp)) != nil { temps.append(tmp) }
             }
-            Task { await room.upload(temps) }
+            Task {
+                await room.share(temps)
+                try? FileManager.default.removeItem(at: dir)
+            }
         }
         .task { await room.load() }
+        .confirmationDialog("„\(pendingDelete?.title ?? "")“ aus dem Clan löschen?", isPresented: deleteShown, titleVisibility: .visible,
+                            presenting: pendingDelete) { s in
+            Button("Löschen", role: .destructive) { Task { await room.delete(s) } }
+        } message: { _ in
+            Text("Der Sound verschwindet für alle im Clan. Wer ihn schon in seine eigenen Sounds übernommen hat, behält ihn.")
+        }
+    }
+}
+
+extension ClanPage {
+    fileprivate var deleteShown: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 }
 

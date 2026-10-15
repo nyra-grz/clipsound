@@ -128,6 +128,9 @@ private struct AccountAuth: View {
                 }
                 .clanCard()
                 .frame(maxWidth: 380)
+                Text("Mit einem Konto gilt die [Datenschutzerklärung](\(Account.privacyURL.absoluteString)). Deine Sounds bleiben auf deinen Geräten.")
+                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
                 Spacer()
             }
             .frame(maxWidth: .infinity)
@@ -145,6 +148,8 @@ private struct AccountHome: View {
     @State private var newClan = ""
     @State private var joinCode = ""
     @State private var note: String?
+    @State private var confirmDelete = false
+    @State private var password = ""
 
     var body: some View {
         ScrollView {
@@ -201,10 +206,28 @@ private struct AccountHome: View {
 
                 if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
                 if let p = account.problem { Label(p, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout) }
+
+                // Datenschutz
+                HStack {
+                    Link("Datenschutzerklärung", destination: Account.privacyURL)
+                    Spacer()
+                    Button("Konto löschen …", role: .destructive) { password = ""; confirmDelete = true }
+                        .buttonStyle(.link).foregroundStyle(.red)
+                }
+                .font(.callout)
             }
             .padding(24)
         }
         .task { await account.refreshMe() }
+        .alert("Konto wirklich löschen?", isPresented: $confirmDelete) {
+            SecureField("Passwort", text: $password)
+            Button("Endgültig löschen", role: .destructive) {
+                Task { _ = await account.deleteAccount(password: password) }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("E-Mail, Name, Passwort und Mitgliedschaften werden gelöscht. Clans, die dir gehören, übernimmt ein anderes Mitglied; bist du allein drin, wird der Clan aufgelöst. Das kann man nicht rückgängig machen.")
+        }
     }
 }
 

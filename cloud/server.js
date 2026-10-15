@@ -2,18 +2,23 @@
 // Wer eine Lobby öffnet (Host), bringt seine Sounds mit. Wer mit dem 5-stelligen Code beitritt,
 // sieht sie und kann sie abspielen – jeder gedrückte Sound läuft bei allen gleichzeitig.
 // Einen Sound behalten geht nur, wenn beide Seiten zustimmen.
-// Metadaten liegen in Postgres (DATABASE_URL), die Audio-Dateien auf dem Volume (DATA_DIR).
+//
+// Der Server speichert KEINE Audio-Dateien. In Postgres stehen nur Listen (Name, Größe, sha256).
+// Braucht jemand eine Datei, bittet der Server ein Gerät, das sie hat, sie zu schicken, und reicht sie
+// im Arbeitsspeicher direkt weiter (Durchleitung). Ist gerade niemand online, der sie hat, gibt es sie nicht.
 //
 // HTTP
 //   POST /api/lobbies                       {name}                → {code, hostToken}
 //   GET  /api/lobbies/:code                                       → {code, host, sounds}
-//   PUT  /api/lobbies/:code/sounds  (Host)  {sounds:[{id,name,size}]} → {missing:[id], skipped:[name]}
-//        id = sha256 der Datei (hex). Ersetzt die ganze Liste; fehlende Dateien danach hochladen.
-//   PUT  /api/lobbies/:code/blobs/:id (Host) Rohdaten der Datei
-//   GET  /api/lobbies/:code/blobs/:id                             → Audio
+//   PUT  /api/lobbies/:code/sounds  (Host)  {sounds:[{id,name,size}]} → {missing:[], skipped:[name]}
+//        id = sha256 der Datei (hex). Ersetzt die ganze Liste.
+//   GET  /api/lobbies/:code/blobs/:id                             → Audio (von einem Gerät in der Lobby)
+//   PUT  /api/relay/:rid                    Rohdaten der Datei     (Antwort eines Geräts auf „send“)
 //   Host-Anfragen tragen „Authorization: Bearer <hostToken>“.
+//   Clans: GET|POST /api/clans/:id/sounds, DELETE /api/clans/:id/sounds/:sid (Admin),
+//          GET /api/clans/:id/blobs/:sid, POST /api/clans/:id/session → {code, ticket}; Rest in clans.js
 //
-// WebSocket  wss://…/ws?lobby=CODE&name=Daniel[&token=hostToken]
+// WebSocket  wss://…/ws?lobby=CODE&name=Daniel[&token=hostToken][&ticket=clanTicket]
 //   Server → hello {you, isHost, host, code, sounds, members, serverTime}, sounds {sounds}, members {members},
 //            play {id, by, from, at}, stop {by, from}, pong {t, serverTime},
 //            asked {req, id, name, by, from}      (an den Host: Gast möchte den Sound behalten)
@@ -21,10 +26,19 @@
 //            answered {req, id, name, ok, kind}   (an beide: Ergebnis; kind = ask | offer)
 //            closed {reason}                      (Lobby ist zu, danach Close 4410)
 //            setvolume {level, by}               (an ein Gerät: jemand stellt die Lautstärke ein, 0…1)
+//            send {rid, id}                       (bitte Datei id an PUT /api/relay/rid schicken)
 //   Client → play {id}, stop {}, ping {t}, ask {id}, offer {id, to}, answer {req, ok},
 //            volume {level, system}  (eigene Lautstärke melden; system = echte Lautsprecher, sonst nur App)
 //            setvolume {to, level}   (jeder bei jedem)
-//   Close-Codes: 4404 Lobby gibt's nicht, 4401 falscher Host-Token, 4409 voll, 4410 geschlossen, 4429 zu viele Versuche
+//            have {ids}              (diese Dateien liegen bei mir – ersetzt die bisherige Liste)
+//            nosend {rid}            (die angefragte Datei habe ich doch nicht)
+//   In einer Clan-Session gibt es keinen Host; man kommt nur mit dem Ticket aus POST …/session hinein.
+//
+// WebSocket  wss://…/ws?share=1   Geräte-Verbindung, solange man in der App angemeldet ist
+//   Client → auth {token} (als Erstes), have {ids}, nosend {rid}, ping {t}
+//   Server → ready {}, want {sounds:[{id,size}]} (Clan-Sounds, nach denen das Gerät schauen soll), send {rid, id}, pong
+//
+//   Close-Codes: 4404 Lobby gibt's nicht, 4401 kein Zugang, 4409 voll, 4410 geschlossen, 4429 zu viele Versuche
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -34,15 +48,17 @@ const { WebSocketServer } = require('ws');
 const clans = require('./clans');
 
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
-const BLOB_DIR = path.join(DATA_DIR, 'blobs');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const MAX_FILE = 15 * 1024 * 1024;   // pro Sound
 const MAX_LOBBY = 150 * 1024 * 1024; // alle Sounds einer Lobby zusammen
 const MAX_SOUNDS = 300;
 const MAX_MEMBERS = 8;
 const PLAY_DELAY = 150;              // ms Vorlauf, damit alle zur gleichen Zeit starten
-const HOST_GRACE = 60 * 1000;        // so lange wartet eine Lobby, wenn der Host weg ist
+const HOST_GRACE = 60 * 1000;        // so lange wartet eine Lobby, wenn der Host weg ist (Clan-Session: wenn keiner mehr drin ist)
+const SEND_START = 8000;             // so lange hat ein Gerät, um mit dem Schicken anzufangen
+const SEND_TIME = 45000;             // … und so lange, um fertig zu werden
+const MAX_RELAYS = 24;               // gleichzeitige Durchleitungen (jede hält höchstens MAX_FILE im Arbeitsspeicher)
+const MAX_DEVICES = 5;               // Geräte-Verbindungen pro Konto
 
 const AUDIO_TYPES = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg',
@@ -51,12 +67,16 @@ const AUDIO_TYPES = {
 };
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
-fs.mkdirSync(BLOB_DIR, { recursive: true });
+// Bis Version 2.4 lagen hochgeladene Sounds auf dem Volume. Die braucht niemand mehr – weg damit.
+const OLD_BLOBS = path.join(process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data'), 'blobs');
+fs.rmSync(OLD_BLOBS, { recursive: true, force: true });
 
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: /railway\.internal|localhost|127\.0\.0\.1/.test(process.env.DATABASE_URL || '') ? false : { rejectUnauthorized: false },
 });
+
+let ticketSecret = '';
 
 async function migrate() {
   await db.query(`
@@ -76,8 +96,16 @@ async function migrate() {
       pos   integer NOT NULL,
       PRIMARY KEY (code, id)
     );
+    CREATE TABLE IF NOT EXISTS server_secrets (
+      name  text PRIMARY KEY,
+      value text NOT NULL
+    );
   `);
   await clans.migrate(db); // Accounts & Clans (additiv, bricht die Lobbys nicht)
+  await db.query('INSERT INTO server_secrets (name, value) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+    ['session-ticket', crypto.randomBytes(32).toString('hex')]);
+  ticketSecret = (await db.query('SELECT value FROM server_secrets WHERE name = $1', ['session-ticket'])).rows[0].value;
+  for (const r of (await db.query('SELECT clan_id, code FROM clan_sessions')).rows) sessionClan.set(r.code, r.clan_id);
 }
 
 // ---------- Hilfen ----------
@@ -86,6 +114,7 @@ const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 const newCode = () => [...crypto.randomBytes(5)].map(b => CODE_CHARS[b % CODE_CHARS.length]).join('');
 const normCode = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 5);
 const hashToken = t => crypto.createHash('sha256').update(String(t || '')).digest('hex');
+const sha256 = buf => crypto.createHash('sha256').update(buf).digest('hex');
 const cleanPerson = n => String(n || '').replace(/[^\p{L}\p{N} _\-.]/gu, '').trim().slice(0, 24);
 const isId = id => typeof id === 'string' && /^[0-9a-f]{64}$/.test(id);
 
@@ -141,7 +170,140 @@ function blocked(ip) {
   return list.length >= 30;
 }
 function miss(ip) { (misses.get(ip) || misses.set(ip, []).get(ip)).push(Date.now()); }
-setInterval(() => { for (const [ip, l] of misses) if (!l.some(t => Date.now() - t < 600000)) misses.delete(ip); }, 600000);
+// Dateien anfordern kostet die Geräte Upload – pro IP begrenzen
+const pulls = new Map(); // ip → [zeitpunkte]
+function tooManyPulls(ip) {
+  const now = Date.now();
+  const list = (pulls.get(ip) || []).filter(t => now - t < 5 * 60 * 1000);
+  list.push(now);
+  pulls.set(ip, list);
+  return list.length > 600;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, l] of misses) if (!l.some(t => now - t < 600000)) misses.delete(ip);
+  for (const [ip, l] of pulls) if (!l.some(t => now - t < 300000)) pulls.delete(ip);
+}, 600000);
+
+// ---------- Wer hat welche Datei (nur im Arbeitsspeicher) ----------
+const lobbies = new Map();      // code → Set<ws>
+const hostAway = new Map();     // code → seit wann kein Host (Clan-Session: niemand) verbunden ist
+const requests = new Map();     // req → {code, kind, id, name, guest, host, at}
+const devices = new Map();      // userId → Set<ws> (Geräte-Verbindungen angemeldeter Nutzer)
+const sessionClan = new Map();  // Lobby-Code → Clan-ID (laufende Clan-Sessions)
+
+const live = ws => ws.readyState === 1;
+const sessionOf = clanId => { for (const [code, c] of sessionClan) if (c === clanId) return code; return null; };
+
+/** Geräte von Clan-Mitgliedern, die Datei id haben (Geräte-Verbindungen + Leute in der Clan-Session). */
+function clanDevices(clanId, id) {
+  const out = [];
+  for (const set of devices.values()) for (const ws of set) if (ws.clans.has(clanId) && ws.has.has(id)) out.push(ws);
+  const code = sessionOf(clanId);
+  if (code) for (const ws of lobbies.get(code) || []) if (ws.has.has(id)) out.push(ws);
+  return out;
+}
+
+/** Geräte in der Lobby, die Datei id haben (bei einer Clan-Session auch die übrigen Clan-Geräte). */
+function lobbyDevices(code, id) {
+  const clanId = sessionClan.get(code);
+  if (clanId) return clanDevices(clanId, id);
+  return [...(lobbies.get(code) || [])].filter(ws => ws.has.has(id));
+}
+
+// ---------- Durchleitung: Dateien von Gerät zu Gerät ----------
+const relays = new Map();   // rid → {id, ws, started, done, timer}
+const inflight = new Map(); // id → Promise<Buffer|null>: dieselbe Datei nur einmal gleichzeitig holen
+
+function askDevice(ws, id) {
+  return new Promise((resolve, reject) => {
+    if (relays.size >= MAX_RELAYS) return reject(Object.assign(new Error('Server ausgelastet'), { busy: true }));
+    const rid = crypto.randomBytes(16).toString('hex');
+    const r = { id, ws, started: false };
+    r.done = (err, buf) => {
+      if (relays.get(rid) !== r) return;
+      relays.delete(rid);
+      clearTimeout(r.timer);
+      ws.sending--;
+      err ? reject(err) : resolve(buf);
+    };
+    r.timer = setTimeout(() => r.done(new Error('keine Antwort')), SEND_START);
+    relays.set(rid, r);
+    ws.sending++;
+    sendTo(ws, { type: 'send', rid, id });
+  });
+}
+
+/** Datei bei einem Gerät holen, das sie hat (bis zu 3 versuchen). null = gerade hat sie niemand. */
+function fetchFromDevices(id, candidates) {
+  if (inflight.has(id)) return inflight.get(id);
+  const p = (async () => {
+    const tried = new Set();
+    for (let i = 0; i < 3; i++) {
+      // wer gerade am wenigsten schickt, sonst zufällig
+      const next = candidates().filter(ws => live(ws) && !tried.has(ws))
+        .map(ws => [ws, ws.sending + Math.random()]).sort((a, b) => a[1] - b[1])[0]?.[0];
+      if (!next) return null;
+      tried.add(next);
+      try { return await askDevice(next, id); } catch (e) { if (e.busy) throw e; }
+    }
+    return null;
+  })().finally(() => inflight.delete(id));
+  inflight.set(id, p);
+  return p;
+}
+
+/** Gerät ist weg oder hat abgesagt: offene Anfragen an es beenden. */
+function dropRelays(ws) {
+  for (const r of relays.values()) if (r.ws === ws) r.done(new Error('Gerät weg'));
+}
+
+async function relayIn(req, res, rid) {
+  const r = relays.get(rid);
+  if (!r || r.started) return json(res, 404, { error: 'Nicht (mehr) angefragt' });
+  r.started = true;
+  clearTimeout(r.timer);
+  r.timer = setTimeout(() => r.done(new Error('zu langsam')), SEND_TIME);
+  let buf;
+  try { buf = await readBody(req, MAX_FILE); } catch (e) { r.done(e); throw e; }
+  if (sha256(buf) !== r.id || !looksLikeAudio(buf)) {
+    r.ws.has.delete(r.id); // dieses Gerät nicht mehr danach fragen
+    r.done(new Error('falsche Datei'));
+    return json(res, 400, { error: 'Datei passt nicht' });
+  }
+  r.done(null, buf);
+  json(res, 200, { ok: true });
+}
+
+/** Audio ausliefern (nur aus dem Arbeitsspeicher, nichts wird zwischengespeichert). */
+function sendAudio(req, res, buf, name) {
+  const head = {
+    'Content-Type': AUDIO_TYPES[path.extname(name).toLowerCase()] || 'application/octet-stream',
+    'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store',
+  };
+  const range = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
+  if (range && (range[1] || range[2])) {
+    const start = range[1] ? +range[1] : Math.max(0, buf.length - +range[2]);
+    const end = range[1] && range[2] ? Math.min(+range[2], buf.length - 1) : buf.length - 1;
+    if (start > end || start >= buf.length) { res.writeHead(416, { ...head, 'Content-Range': `bytes */${buf.length}` }); return res.end(); }
+    res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${buf.length}`, 'Content-Length': end - start + 1 });
+    return res.end(buf.subarray(start, end + 1));
+  }
+  res.writeHead(200, { ...head, 'Content-Length': buf.length });
+  res.end(buf);
+}
+
+/** Datei holen und ausliefern, oder sagen, warum es nicht geht. */
+async function pull(req, res, id, name, candidates) {
+  if (tooManyPulls(clientIp(req))) return json(res, 429, { error: 'Zu viele Downloads, warte ein paar Minuten' });
+  let buf;
+  try { buf = await fetchFromDevices(id, candidates); } catch (e) {
+    if (e.busy) return json(res, 503, { error: 'Server ausgelastet, gleich nochmal versuchen' });
+    throw e;
+  }
+  if (!buf) return json(res, 404, { error: 'Gerade ist niemand online, der diesen Sound hat' });
+  sendAudio(req, res, buf, name);
+}
 
 // ---------- Datenbank ----------
 async function getLobby(code) {
@@ -149,10 +311,10 @@ async function getLobby(code) {
   return rows[0] || null;
 }
 
-/** Nur Sounds, deren Datei schon da ist */
+/** Nur Sounds, die gerade jemand in der Lobby (bzw. im Clan) auf dem Gerät hat */
 async function lobbySounds(code) {
   const { rows } = await db.query('SELECT id, name, size FROM lobby_sounds WHERE code = $1 ORDER BY pos', [code]);
-  return rows.filter(r => fs.existsSync(path.join(BLOB_DIR, r.id)));
+  return rows.filter(r => lobbyDevices(code, r.id).length > 0);
 }
 
 async function soundIn(code, id) {
@@ -160,23 +322,12 @@ async function soundIn(code, id) {
   return rows[0] || null;
 }
 
-/** Dateien löschen, die keine Lobby mehr braucht */
-async function sweepBlobs() {
-  const lob = await db.query('SELECT DISTINCT id FROM lobby_sounds');
-  const cl = await db.query('SELECT DISTINCT id FROM clan_sounds'); // Clan-Dateien nicht wegräumen
-  const used = new Set([...lob.rows, ...cl.rows].map(r => r.id));
-  for (const f of await fs.promises.readdir(BLOB_DIR)) {
-    if (used.has(f.replace(/\.part$/, ''))) continue;
-    const st = await fs.promises.stat(path.join(BLOB_DIR, f)).catch(() => null);
-    // gerade hochgeladene Dateien kurz in Ruhe lassen
-    if (st && Date.now() - st.mtimeMs > 5 * 60 * 1000) await fs.promises.unlink(path.join(BLOB_DIR, f)).catch(() => {});
-  }
-}
-
 async function closeLobby(code, reason) {
   await db.query('DELETE FROM lobbies WHERE code = $1', [code]);
   await db.query('DELETE FROM clan_sessions WHERE code = $1', [code]); // falls das eine Clan-Session war
   hostAway.delete(code);
+  sessionClan.delete(code);
+  lastSounds.delete(code);
   const set = lobbies.get(code);
   if (set) {
     for (const ws of set) {
@@ -193,18 +344,8 @@ async function closeLobby(code, reason) {
 function serveFile(req, res, file, type, extra = {}) {
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) return json(res, 404, { error: 'Nicht gefunden' });
-    const range = req.headers.range && /bytes=(\d*)-(\d*)/.exec(req.headers.range);
-    const head = { 'Content-Type': type, 'Accept-Ranges': 'bytes', 'Access-Control-Allow-Origin': '*', ...extra };
-    if (range) {
-      const start = range[1] ? +range[1] : 0;
-      const end = range[2] ? Math.min(+range[2], st.size - 1) : st.size - 1;
-      if (!range[1] && !range[2] || start > end || start >= st.size) return res.writeHead(416, { ...head, 'Content-Range': `bytes */${st.size}` }), res.end(); // sonst RangeError → Absturz
-      res.writeHead(206, { ...head, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
-      fs.createReadStream(file, { start, end }).pipe(res);
-    } else {
-      res.writeHead(200, { ...head, 'Content-Length': st.size });
-      fs.createReadStream(file).pipe(res);
-    }
+    res.writeHead(200, { 'Content-Type': type, 'Content-Length': st.size, 'Access-Control-Allow-Origin': '*', ...extra });
+    fs.createReadStream(file).pipe(res);
   });
 }
 
@@ -241,28 +382,18 @@ async function setSounds(req, res, lobby) {
   } catch (e) {
     await client.query('ROLLBACK'); throw e;
   } finally { client.release(); }
-  const missing = list.filter(s => !fs.existsSync(path.join(BLOB_DIR, s.id))).map(s => s.id);
-  json(res, 200, { missing, skipped });
-  broadcastSounds(lobby.code);
+  json(res, 200, { missing: [], skipped }); // „missing“ bleibt für alte Apps: nichts hochladen
+  soundsChanged(lobby.code);
 }
 
-async function putBlob(req, res, lobby, id) {
-  const sound = await soundIn(lobby.code, id);
-  if (!sound) return json(res, 404, { error: 'Sound steht nicht in der Liste' });
-  const buf = await readBody(req, MAX_FILE);
-  if (crypto.createHash('sha256').update(buf).digest('hex') !== id) return json(res, 400, { error: 'Prüfsumme stimmt nicht' });
-  if (!looksLikeAudio(buf)) return json(res, 415, { error: 'Das ist keine Audio-Datei' });
-  const file = path.join(BLOB_DIR, id);
-  await fs.promises.writeFile(file + '.part', buf);
-  await fs.promises.rename(file + '.part', file);
-  json(res, 200, { ok: true });
-  broadcastSounds(lobby.code);
-}
-
-// ---------- Clan-Sounds & Clan-Session (nutzen dieselbe Blob-Infrastruktur) ----------
-async function clanSoundsOf(clanId) {
-  const { rows } = await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId]);
-  return rows.filter(r => fs.existsSync(path.join(BLOB_DIR, r.id)));
+// ---------- Clan-Sounds & Clan-Session ----------
+const ticketFor = (code, userId) =>
+  userId + '.' + crypto.createHmac('sha256', ticketSecret).update(code + ':' + userId).digest('hex').slice(0, 32);
+function ticketUser(code, ticket) {
+  const [userId, mac] = String(ticket || '').split('.');
+  if (!userId || !mac) return null;
+  const want = ticketFor(code, userId).split('.')[1];
+  return want.length === mac.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(mac)) ? userId : null;
 }
 
 /** Lobby-Soundliste einer laufenden Clan-Session auf die Clan-Bibliothek bringen. */
@@ -276,20 +407,66 @@ async function syncSessionSounds(code, clanId) {
       await client.query('INSERT INTO lobby_sounds (code, id, name, size, pos) VALUES ($1,$2,$3,$4,$5)', [code, s.id, s.name, s.size, pos]);
     await client.query('COMMIT');
   } catch (e) { await client.query('ROLLBACK'); throw e; } finally { client.release(); }
-  broadcastSounds(code);
+  soundsChanged(code);
 }
 
-/** true = hier beantwortet. Deckt /api/clans/:id/sounds | /session | /blobs/:id ab. */
+/** Welche Clan-Sounds ein Gerät suchen soll (alle aus allen Clans des Nutzers). */
+async function sendWant(ws) {
+  const { rows } = await db.query(
+    'SELECT DISTINCT s.id, s.size FROM clan_sounds s JOIN clan_members m ON m.clan_id = s.clan_id WHERE m.user_id = $1', [ws.userId]);
+  sendTo(ws, { type: 'want', sounds: rows });
+}
+
+/** Sounds eines Clans haben sich geändert: Geräte der Mitglieder neu suchen lassen, Session angleichen. */
+async function clanSoundsChanged(clanId) {
+  for (const set of devices.values()) for (const ws of set) if (ws.clans.has(clanId)) await sendWant(ws);
+  const code = sessionOf(clanId);
+  if (code) await syncSessionSounds(code, clanId);
+}
+
+/** Clans eines Nutzers haben sich geändert (beigetreten, ausgetreten, angelegt). */
+async function membershipChanged(userId) {
+  const now = new Set((await db.query('SELECT clan_id FROM clan_members WHERE user_id = $1', [userId])).rows.map(r => r.clan_id));
+  const touched = new Set(now);
+  for (const ws of devices.get(userId) || []) {
+    ws.clans.forEach(c => touched.add(c));
+    ws.clans = new Set(now);
+    await sendWant(ws);
+  }
+  for (const clanId of touched) {
+    const code = sessionOf(clanId);
+    if (!code) continue;
+    // wer nicht mehr im Clan ist, fliegt aus der Clan-Session
+    if (!now.has(clanId)) for (const ws of lobbies.get(code) || []) if (ws.userId === userId) ws.close(4410, 'Nicht mehr im Clan');
+    soundsChanged(code);
+  }
+}
+
+/** Konto gelöscht: alle Verbindungen des Nutzers beenden. */
+function userGone(userId) {
+  for (const ws of devices.get(userId) || []) ws.close(4401, 'Konto gelöscht');
+  for (const set of lobbies.values()) for (const ws of set) if (ws.userId === userId) ws.close(4410, 'Konto gelöscht');
+}
+
+/** Clan aufgelöst (letztes Mitglied hat sein Konto gelöscht): Session schließen. */
+async function clanGone(clanId) {
+  const code = sessionOf(clanId);
+  if (code) await closeLobby(code, 'Der Clan wurde aufgelöst');
+}
+
+/** true = hier beantwortet. Deckt /api/clans/:id/sounds[/:sid] | /session | /blobs/:sid ab. */
 async function clanMedia(req, res, p) {
-  const m = /^\/api\/clans\/([0-9a-f]{32})\/(sounds|session|blobs\/[0-9a-f]{64})$/.exec(p);
+  const m = /^\/api\/clans\/([0-9a-f]{32})\/(sounds|session|sounds\/[0-9a-f]{64}|blobs\/[0-9a-f]{64})$/.exec(p);
   if (!m) return false;
   const clanId = m[1], tail = m[2];
   const me = await clans.authUser(db, req);
   if (!me) { json(res, 401, { error: 'Nicht eingeloggt' }); return true; }
-  if (!await clans.memberRole(db, clanId, me.id)) { json(res, 403, { error: 'Du bist nicht in diesem Clan' }); return true; }
+  const role = await clans.memberRole(db, clanId, me.id);
+  if (!role) { json(res, 403, { error: 'Du bist nicht in diesem Clan' }); return true; }
 
   if (tail === 'sounds' && req.method === 'GET') {
-    json(res, 200, { sounds: await clanSoundsOf(clanId) });
+    const { rows } = await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId]);
+    json(res, 200, { sounds: rows.map(s => ({ ...s, available: clanDevices(clanId, s.id).length > 0 })) });
     return true;
   }
 
@@ -312,52 +489,49 @@ async function clanMedia(req, res, p) {
       existing.add(s.id); total += size; count++;
       added.push({ id: s.id, name, size });
     }
-    const missing = added.filter(s => !fs.existsSync(path.join(BLOB_DIR, s.id))).map(s => s.id);
-    json(res, 200, { added: added.length, missing, skipped });
-    const sess = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
-    if (sess && await getLobby(sess.code)) await syncSessionSounds(sess.code, clanId);
+    json(res, 200, { added: added.length, missing: [], skipped });
+    if (added.length) await clanSoundsChanged(clanId);
+    return true;
+  }
+
+  if (tail.startsWith('sounds/') && req.method === 'DELETE') {
+    if (role !== 'admin') { json(res, 403, { error: 'Nur Admins können Clan-Sounds löschen' }); return true; }
+    const r = await db.query('DELETE FROM clan_sounds WHERE clan_id = $1 AND id = $2', [clanId, tail.slice(7)]);
+    if (!r.rowCount) { json(res, 404, { error: 'Den Sound gibt es im Clan nicht' }); return true; }
+    json(res, 200, { ok: true });
+    await clanSoundsChanged(clanId);
     return true;
   }
 
   if (tail.startsWith('blobs/')) {
     const id = tail.slice(6);
+    if (req.method === 'PUT') { json(res, 410, { error: 'Sounds werden nicht mehr hochgeladen – bitte ClipSound aktualisieren.' }); return true; }
     const row = (await db.query('SELECT name FROM clan_sounds WHERE clan_id = $1 AND id = $2', [clanId, id])).rows[0];
-    if (req.method === 'PUT') {
-      if (!row) { json(res, 404, { error: 'Sound steht nicht in der Clan-Liste' }); return true; }
-      const buf = await readBody(req, MAX_FILE);
-      if (crypto.createHash('sha256').update(buf).digest('hex') !== id) { json(res, 400, { error: 'Prüfsumme stimmt nicht' }); return true; }
-      if (!looksLikeAudio(buf)) { json(res, 415, { error: 'Das ist keine Audio-Datei' }); return true; }
-      const file = path.join(BLOB_DIR, id);
-      if (!fs.existsSync(file)) { await fs.promises.writeFile(file + '.part', buf); await fs.promises.rename(file + '.part', file); }
-      json(res, 200, { ok: true });
-      const sess = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
-      if (sess && await getLobby(sess.code)) broadcastSounds(sess.code);
-      return true;
-    }
     if (!row) { json(res, 404, { error: 'Nicht gefunden' }); return true; }
-    serveFile(req, res, path.join(BLOB_DIR, id), AUDIO_TYPES[path.extname(row.name).toLowerCase()],
-      { 'Cache-Control': 'public, max-age=31536000, immutable' });
+    await pull(req, res, id, row.name, () => clanDevices(clanId, id));
     return true;
   }
 
   if (tail === 'session' && req.method === 'POST') {
-    const open = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0];
-    if (open && await getLobby(open.code)) { json(res, 200, { code: open.code, host: false }); return true; }
-    await db.query('DELETE FROM clan_sessions WHERE clan_id = $1', [clanId]); // verwaiste Session aufräumen
-    const token = crypto.randomBytes(24).toString('base64url');
-    let code = '';
-    for (let i = 0; i < 10; i++) {
-      const c = newCode();
-      const r = await db.query('INSERT INTO lobbies (code, host_token, host_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [c, hashToken(token), me.name || 'Clan']);
-      if (r.rowCount) { code = c; break; }
+    let code = sessionOf(clanId);
+    if (code && !await getLobby(code)) { sessionClan.delete(code); code = null; }
+    if (!code) {
+      await db.query('DELETE FROM clan_sessions WHERE clan_id = $1', [clanId]); // verwaiste Session aufräumen
+      const clanName = (await db.query('SELECT name FROM clans WHERE id = $1', [clanId])).rows[0]?.name || 'Clan';
+      for (let i = 0; i < 10 && !code; i++) {
+        const c = newCode();
+        // Clan-Sessions haben keinen Host: der Token wird nirgends verraten
+        const r = await db.query('INSERT INTO lobbies (code, host_token, host_name) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
+          [c, hashToken(crypto.randomBytes(24)), clanName]);
+        if (r.rowCount) code = c;
+      }
+      if (!code) { json(res, 503, { error: 'Kein Code frei' }); return true; }
+      await db.query('INSERT INTO clan_sessions (clan_id, code) VALUES ($1,$2) ON CONFLICT (clan_id) DO UPDATE SET code = $2, created_at = now()', [clanId, code]);
+      sessionClan.set(code, clanId);
+      hostAway.set(code, Date.now()); // bis jemand reinkommt
+      await syncSessionSounds(code, clanId);
     }
-    if (!code) { json(res, 503, { error: 'Kein Code frei' }); return true; }
-    const snd = (await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId])).rows;
-    for (const [pos, s] of snd.entries())
-      await db.query('INSERT INTO lobby_sounds (code, id, name, size, pos) VALUES ($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [code, s.id, s.name, s.size, pos]);
-    await db.query('INSERT INTO clan_sessions (clan_id, code) VALUES ($1,$2) ON CONFLICT (clan_id) DO UPDATE SET code = $2, created_at = now()', [clanId, code]);
-    hostAway.set(code, Date.now());
-    json(res, 200, { code, hostToken: token, host: true });
+    json(res, 200, { code, ticket: ticketFor(code, me.id) });
     return true;
   }
 
@@ -373,12 +547,14 @@ async function route(req, res) {
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PUT',
+      'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE',
       'Access-Control-Allow-Headers': 'Authorization, Content-Type, Range',
     });
     return res.end();
   }
   if (p === '/health') return json(res, 200, { ok: true });
+
+  if ((m = /^\/api\/relay\/([0-9a-f]{32})$/.exec(p)) && req.method === 'PUT') return relayIn(req, res, m[1]);
 
   if (p === '/api/lobbies' && req.method === 'POST') {
     let name = '';
@@ -411,25 +587,21 @@ async function route(req, res) {
     }
     if ((m = /^\/blobs\/([0-9a-f]{64})$/.exec(rest))) {
       const id = m[1];
-      if (req.method === 'PUT') {
-        if (!isHost(req, lobby)) return json(res, 401, { error: 'Nur der Host' });
-        return putBlob(req, res, lobby, id);
-      }
+      if (req.method === 'PUT') return json(res, 410, { error: 'Sounds werden nicht mehr hochgeladen – bitte ClipSound aktualisieren.' });
       const sound = await soundIn(lobby.code, id);
       if (!sound) return json(res, 404, { error: 'Nicht gefunden' });
-      return serveFile(req, res, path.join(BLOB_DIR, id), AUDIO_TYPES[path.extname(sound.name).toLowerCase()],
-        { 'Cache-Control': 'public, max-age=31536000, immutable' }); // gleicher Hash = gleiche Datei
+      return pull(req, res, id, sound.name, () => lobbyDevices(lobby.code, id));
     }
     return json(res, 404, { error: 'Nicht gefunden' });
   }
 
   if (p.startsWith('/api/account') || p.startsWith('/api/clans')) {
-    if (await clanMedia(req, res, p)) return; // Clan-Sounds/Session (brauchen die Blob-Infrastruktur)
-    await clans.handle(req, res, { db, readBody, json });
+    if (await clanMedia(req, res, p)) return; // Clan-Sounds/Session (brauchen die Geräte-Verbindungen)
+    await clans.handle(req, res, { db, readBody, json, hooks: { membershipChanged, userGone, clanGone } });
     return;
   }
 
-  const rel = p === '/' || /^\/l\/[A-Za-z0-9]+$/.test(p) ? 'index.html' : path.basename(p);
+  const rel = p === '/' || /^\/l\/[A-Za-z0-9]+$/.test(p) ? 'index.html' : p === '/datenschutz' ? 'datenschutz.html' : path.basename(p);
   const type = STATIC_TYPES[path.extname(rel)];
   if (!type) return json(res, 404, { error: 'Nicht gefunden' });
   serveFile(req, res, path.join(PUBLIC_DIR, rel), type, { 'Cache-Control': 'no-cache' });
@@ -444,10 +616,6 @@ const server = http.createServer((req, res) => {
 });
 
 // ---------- Echtzeit ----------
-const lobbies = new Map();  // code → Set<ws>
-const hostAway = new Map(); // code → seit wann kein Host verbunden ist
-const requests = new Map(); // req → {code, kind, id, name, guest, host, at}
-
 const members = code => [...(lobbies.get(code) || [])].map(ws => ({ id: ws.id, name: ws.name, host: ws.isHost, volume: ws.volume, system: ws.volumeSystem }));
 const findMember = (code, id) => [...(lobbies.get(code) || [])].find(ws => ws.id === id);
 const sendTo = (ws, msg) => { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); };
@@ -455,8 +623,41 @@ function broadcast(code, msg) {
   const data = JSON.stringify(msg);
   for (const ws of lobbies.get(code) || []) if (ws.readyState === 1) ws.send(data);
 }
-async function broadcastSounds(code) {
-  if (lobbies.has(code)) broadcast(code, { type: 'sounds', sounds: await lobbySounds(code) });
+
+// Wer was hat, ändert sich oft (jeder Gast meldet seine fertigen Dateien) – Liste nur neu schicken,
+// wenn sie wirklich anders ist, und kurz sammeln
+const lastSounds = new Map();   // code → zuletzt verschickte Liste (JSON)
+const soundTimers = new Map();  // code → Timer
+function soundsChanged(code) {
+  if (!lobbies.has(code) || soundTimers.has(code)) return;
+  soundTimers.set(code, setTimeout(async () => {
+    soundTimers.delete(code);
+    try {
+      const sounds = await lobbySounds(code);
+      const key = JSON.stringify(sounds);
+      if (lastSounds.get(code) === key) return;
+      lastSounds.set(code, key);
+      broadcast(code, { type: 'sounds', sounds });
+    } catch (e) { console.error('Soundliste', e); }
+  }, 250));
+}
+// Eine Clan-Geräte-Verbindung hat sich geändert: laufende Sessions ihrer Clans angleichen
+const deviceChanged = ws => { for (const clanId of ws.clans) { const code = sessionOf(clanId); if (code) soundsChanged(code); } };
+
+/** Nachrichten, die Lobby- und Geräte-Verbindungen gleich behandeln. true = erledigt. */
+function deviceMessage(ws, msg, onHaveChanged) {
+  if (msg.type === 'ping') { sendTo(ws, { type: 'pong', t: msg.t, serverTime: Date.now() }); return true; }
+  if (msg.type === 'have' && Array.isArray(msg.ids)) {
+    ws.has = new Set(msg.ids.filter(isId).slice(0, 2000));
+    onHaveChanged();
+    return true;
+  }
+  if (msg.type === 'nosend' && typeof msg.rid === 'string') {
+    const r = relays.get(msg.rid);
+    if (r && r.ws === ws) { ws.has.delete(r.id); r.done(new Error('nicht da')); }
+    return true;
+  }
+  return false;
 }
 
 async function onMessage(ws, code, raw) {
@@ -464,7 +665,7 @@ async function onMessage(ws, code, raw) {
   try { msg = JSON.parse(raw); } catch { return; }
   const now = Date.now();
 
-  if (msg.type === 'ping') return sendTo(ws, { type: 'pong', t: msg.t, serverTime: now });
+  if (deviceMessage(ws, msg, () => soundsChanged(code))) return;
 
   if (msg.type === 'play' && isId(msg.id)) {
     ws.plays = ws.plays.filter(t => now - t < 1000);
@@ -491,9 +692,11 @@ async function onMessage(ws, code, raw) {
 
   // Gast fragt: „Darf ich den Sound behalten?“ → Host entscheidet
   if (msg.type === 'ask' && !ws.isHost && isId(msg.id)) {
-    const host = [...lobbies.get(code)].find(m => m.isHost);
     const sound = await soundIn(code, msg.id);
     if (!sound) return;
+    // In der Clan-Session gehören die Sounds allen im Clan
+    if (sessionClan.has(code)) return sendTo(ws, { type: 'answered', req: 'clan', id: sound.id, name: sound.name, ok: true, kind: 'ask' });
+    const host = [...lobbies.get(code)].find(m => m.isHost);
     if (!host) return sendTo(ws, { type: 'answered', id: sound.id, name: sound.name, ok: false, kind: 'ask', reason: 'Der Host ist gerade nicht da' });
     const req = crypto.randomBytes(6).toString('hex');
     requests.set(req, { code, kind: 'ask', id: sound.id, name: sound.name, guest: ws.id, host: host.id, at: now });
@@ -519,14 +722,52 @@ async function onMessage(ws, code, raw) {
   }
 }
 
-const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
+/** Geräte-Verbindung eines angemeldeten Nutzers: meldet, welche Clan-Sounds hier liegen, und schickt sie auf Anfrage. */
+async function deviceConnection(ws) {
+  const first = await new Promise(resolve => {
+    const t = setTimeout(() => resolve(null), 10000);
+    ws.once('message', raw => { clearTimeout(t); try { resolve(JSON.parse(raw)); } catch { resolve(null); } });
+    ws.once('close', () => { clearTimeout(t); resolve(null); });
+  });
+  if (!live(ws)) return;
+  const user = first?.type === 'auth' ? await clans.userFromToken(db, first.token) : null;
+  if (!user) return ws.close(4401, 'Nicht eingeloggt');
+  ws.userId = user.id;
+  ws.clans = new Set((await db.query('SELECT clan_id FROM clan_members WHERE user_id = $1', [user.id])).rows.map(r => r.clan_id));
+  if (!live(ws)) return;
+  const set = devices.get(user.id) || devices.set(user.id, new Set()).get(user.id);
+  if (set.size >= MAX_DEVICES) [...set][0].close(4000, 'Zu viele Geräte'); // das älteste fliegt raus
+  set.add(ws);
+  ws.on('close', () => {
+    set.delete(ws);
+    if (!set.size && devices.get(user.id) === set) devices.delete(user.id);
+    deviceChanged(ws);
+  });
+  ws.on('message', raw => {
+    let msg;
+    try { msg = JSON.parse(raw); } catch { return; }
+    deviceMessage(ws, msg, () => deviceChanged(ws));
+  });
+  sendTo(ws, { type: 'ready' });
+  await sendWant(ws);
+}
+
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 192 * 1024 });
 wss.on('connection', async (ws, req) => {
   const url = new URL(req.url, 'http://x');
+  ws.alive = true;
+  ws.has = new Set();   // Dateien (sha256), die dieses Gerät gemeldet hat
+  ws.clans = new Set();
+  ws.sending = 0;
+  ws.on('pong', () => { ws.alive = true; });
+  ws.on('close', () => dropRelays(ws));
+
+  if (url.searchParams.get('share')) return deviceConnection(ws).catch(e => { console.error('Geräte-Verbindung', e); ws.close(1011); });
+
   const code = normCode(url.searchParams.get('lobby'));
   const ip = clientIp(req);
   ws.id = crypto.randomBytes(4).toString('hex');
   ws.name = cleanPerson(url.searchParams.get('name')) || 'Gast';
-  ws.alive = true;
   ws.plays = [];
   // Nachrichten erst annehmen, wenn die Verbindung fertig eingerichtet ist
   const early = [];
@@ -536,6 +777,15 @@ wss.on('connection', async (ws, req) => {
   try {
     if (blocked(ip)) return ws.close(4429, 'Zu viele Versuche');
     lobby = await getLobby(code);
+    if (lobby && sessionClan.has(code)) {
+      // Clan-Session: nur Mitglieder mit Ticket, der Name kommt aus dem Konto
+      const userId = ticketUser(code, url.searchParams.get('ticket'));
+      const user = userId && await clans.memberRole(db, sessionClan.get(code), userId)
+        ? (await db.query('SELECT id, name FROM users WHERE id = $1', [userId])).rows[0] : null;
+      if (!user) return ws.close(4401, 'Clan-Session: bitte in der App mit deinem Konto beitreten');
+      ws.userId = user.id;
+      ws.name = user.name;
+    }
   } catch (e) {
     console.error('WS', e);
     return ws.close(1011, 'Serverfehler');
@@ -544,22 +794,22 @@ wss.on('connection', async (ws, req) => {
   const token = url.searchParams.get('token');
   if (token && hashToken(token) !== lobby.host_token) return ws.close(4401, 'Falscher Host-Token');
   ws.isHost = !!token;
+  const keepsOpen = m => m.isHost || sessionClan.has(code);
 
   if (!lobbies.has(code)) lobbies.set(code, new Set());
   const set = lobbies.get(code);
   if (!ws.isHost && set.size >= MAX_MEMBERS) return ws.close(4409, 'Lobby ist voll');
-  if (ws.isHost) {
-    for (const old of set) if (old.isHost) old.close(4000, 'Host hat sich neu verbunden');
-    hostAway.delete(code);
-  }
+  if (ws.isHost) for (const old of set) if (old.isHost) old.close(4000, 'Host hat sich neu verbunden');
+  if (keepsOpen(ws)) hostAway.delete(code);
   set.add(ws);
 
-  ws.on('pong', () => { ws.alive = true; });
   ws.on('close', () => {
     set.delete(ws);
-    if (ws.isHost && ![...set].some(m => m.isHost)) hostAway.set(code, Date.now());
-    if (set.size) broadcast(code, { type: 'members', members: members(code) });
-    else if (lobbies.get(code) === set) lobbies.delete(code);
+    if (keepsOpen(ws) && ![...set].some(keepsOpen)) hostAway.set(code, Date.now());
+    if (set.size) {
+      broadcast(code, { type: 'members', members: members(code) });
+      if (ws.has.size) soundsChanged(code);
+    } else if (lobbies.get(code) === set) { lobbies.delete(code); lastSounds.delete(code); }
   });
 
   sendTo(ws, { type: 'hello', you: ws.id, isHost: ws.isHost, host: lobby.host_name, code,
@@ -580,18 +830,18 @@ setInterval(() => {
   }
 }, 25000);
 
-// Lobbys ohne Host schließen, alte Anfragen und Dateien aufräumen
+// Lobbys ohne Host (Clan-Sessions ohne Leute) schließen, alte Anfragen aufräumen
 setInterval(async () => {
   try {
     const now = Date.now();
     const { rows } = await db.query('SELECT code FROM lobbies');
     for (const { code } of rows) {
-      if ([...(lobbies.get(code) || [])].some(ws => ws.isHost)) continue;
+      const clan = sessionClan.has(code);
+      if ([...(lobbies.get(code) || [])].some(ws => clan || ws.isHost)) continue;
       if (!hostAway.has(code)) hostAway.set(code, now); // z. B. nach Server-Neustart
-      if (now - hostAway.get(code) > HOST_GRACE) await closeLobby(code, 'Der Host hat die Lobby verlassen');
+      if (now - hostAway.get(code) > HOST_GRACE) await closeLobby(code, clan ? 'Alle haben die Clan-Session verlassen' : 'Der Host hat die Lobby verlassen');
     }
     for (const [req, r] of requests) if (now - r.at > 10 * 60 * 1000) requests.delete(req);
-    await sweepBlobs();
   } catch (e) { console.error('Aufräumen', e); }
 }, 15000);
 
@@ -603,6 +853,6 @@ async function start(attempt = 1) {
     if (attempt >= 30) process.exit(1);
     return setTimeout(() => start(attempt + 1), 2000);
   }
-  server.listen(PORT, '0.0.0.0', () => console.log(`ClipSound Lobbys auf Port ${PORT}, Daten in ${DATA_DIR}`));
+  server.listen(PORT, '0.0.0.0', () => console.log(`ClipSound Lobbys auf Port ${PORT} – speichert keine Audio-Dateien`));
 }
 start();

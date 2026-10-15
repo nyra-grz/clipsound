@@ -1,7 +1,10 @@
 // Testwerkzeug für ClipSound-Lobbys (spricht dasselbe Protokoll wie die Apps).
 //   node lobby-tool.mjs check <url>                 alles einmal durchprüfen (Host + Gast in einem)
+//   node lobby-tool.mjs clan-check <url>            Konten, Clans, Clan-Sounds und Clan-Session durchprüfen
+//                                                   (braucht DATABASE_URL derselben Datenbank, um die Mail-Codes zu lesen)
 //   node lobby-tool.mjs host  <url> <ordner> [sek]  Lobby mit den Sounds aus <ordner> öffnen, Anfragen annehmen
 //   node lobby-tool.mjs guest <url> <code> [sek]    beitreten, ersten Sound abspielen, danach behalten wollen
+// Der Server speichert keine Dateien: wer eine Datei hat, schickt sie auf „send“ an /api/relay/<rid>.
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
@@ -13,12 +16,24 @@ const sha = buf => crypto.createHash('sha256').update(buf).digest('hex');
 const ok = (c, m) => { if (!c) { console.error('FEHLER:', m); process.exit(1); } console.log('✓', m); };
 const log = (...a) => console.log(new Date().toISOString().slice(11, 23), ...a);
 
-function client(code, name, token) {
-  const ws = new WebSocket(`${wsBase}/ws?lobby=${code}&name=${encodeURIComponent(name)}${token ? '&token=' + token : ''}`);
+/** Datei auf „send“ an den Server schicken (oder absagen, wenn sie hier nicht liegt). */
+async function serve(ws, m) {
+  const buf = ws.files?.get(m.id);
+  ws.served = (ws.served || 0) + 1;
+  if (ws.delay) await new Promise(r => setTimeout(r, ws.delay));
+  if (!buf) return ws.sendJ({ type: 'nosend', rid: m.rid });
+  await fetch(`${base}/api/relay/${m.rid}`, { method: 'PUT', body: ws.corrupt ? Buffer.from('kaputt-kaputt-kaputt') : buf });
+}
+
+function client(code, name, token, query = '') {
+  const url = code === null ? `${wsBase}/ws?share=1`
+    : `${wsBase}/ws?lobby=${code}&name=${encodeURIComponent(name)}${token ? '&token=' + token : ''}${query}`;
+  const ws = new WebSocket(url);
   const queue = [];
   const waiters = [];
   ws.on('message', d => {
     const m = JSON.parse(d);
+    if (m.type === 'send') return serve(ws, m);
     const w = waiters.findIndex(x => x.type === m.type);
     if (w >= 0) waiters.splice(w, 1)[0].res(m); else queue.push(m);
   });
@@ -34,6 +49,9 @@ function client(code, name, token) {
   ws.none = async (type, ms = 800) => { try { await ws.next(type, ms); return false; } catch { return true; } };
   ws.sendJ = m => ws.send(JSON.stringify(m));
   ws.closed = new Promise(r => ws.on('close', (c, why) => r({ code: c, why: String(why) })));
+  ws.opened = new Promise(r => ws.on('open', r));
+  /** Dateien bereitstellen und dem Server melden */
+  ws.offerFiles = list => { ws.files = new Map(list.map(f => [f.id, f.buf])); ws.sendJ({ type: 'have', ids: [...ws.files.keys()] }); };
   return ws;
 }
 
@@ -43,11 +61,6 @@ async function openLobby(name, files) {
   const sounds = files.map(f => { const buf = fs.readFileSync(f); return { id: sha(buf), name: path.basename(f), size: buf.length, buf }; });
   const set = await (await fetch(`${base}/api/lobbies/${r.code}/sounds`, { method: 'PUT', headers: auth,
     body: JSON.stringify({ sounds: sounds.map(({ buf, ...s }) => s) }) })).json();
-  for (const id of set.missing) {
-    const s = sounds.find(x => x.id === id);
-    const up = await fetch(`${base}/api/lobbies/${r.code}/blobs/${id}`, { method: 'PUT', headers: auth, body: s.buf });
-    if (!up.ok) throw new Error('Upload ' + s.name + ': ' + (await up.text()));
-  }
   return { ...r, auth, sounds, set };
 }
 
@@ -57,19 +70,43 @@ if (mode === 'check') {
   const files = audioIn('../windows/testdata').slice(0, 2);
   const L = await openLobby('Daniel', files);
   ok(/^[A-Z2-9]{5}$/.test(L.code), 'Lobby offen, Code ' + L.code + ' (5 Stellen)');
-  ok(L.set.missing.length === 2 || L.set.missing.length === 0, 'Server wollte beide Dateien (oder hatte sie schon vom letzten Test)');
-  const again = await (await fetch(`${base}/api/lobbies/${L.code}/sounds`, { method: 'PUT', headers: L.auth,
-    body: JSON.stringify({ sounds: L.sounds.map(({ buf, ...s }) => s) }) })).json();
-  ok(again.missing.length === 0, 'Zweites Mal: nichts muss neu hoch (Hash-Abgleich)');
+  ok(L.set.missing.length === 0, 'Server will keine Dateien haben (missing ist leer)');
+  const oldUpload = await fetch(`${base}/api/lobbies/${L.code}/blobs/${L.sounds[0].id}`, { method: 'PUT', headers: L.auth, body: L.sounds[0].buf });
+  ok(oldUpload.status === 410, 'Hochladen wie in alten Versionen wird abgelehnt (410)');
 
   const H = client(L.code, 'Daniel', L.hostToken);
   const hh = await H.next('hello');
-  ok(hh.isHost && hh.sounds.length === 2, 'Host verbunden, sieht seine 2 Sounds');
+  ok(hh.isHost && hh.sounds.length === 0, 'Host verbunden – Liste leer, solange er nichts gemeldet hat');
+  H.offerFiles(L.sounds);
+  ok((await H.next('sounds')).sounds.length === 2, 'Host meldet seine 2 Dateien → beide in der Liste');
   const G = client(L.code.toLowerCase(), 'Lukas');
   const gh = await G.next('hello');
   ok(!gh.isHost && gh.host === 'Daniel' && gh.sounds.map(s => s.id).join() === L.sounds.map(s => s.id).join(), 'Gast (Code klein geschrieben) sieht die Host-Sounds');
   const blob = Buffer.from(await (await fetch(`${base}/api/lobbies/${L.code}/blobs/${gh.sounds[0].id}`)).arrayBuffer());
-  ok(sha(blob) === gh.sounds[0].id, 'Gast lädt die Datei, Prüfsumme stimmt');
+  ok(sha(blob) === gh.sounds[0].id && H.served === 1, 'Gast lädt die Datei direkt vom Host-Gerät, Prüfsumme stimmt');
+  H.delay = 300; // damit sich die beiden Anfragen sicher überschneiden
+  const [b1, b2] = await Promise.all([1, 2].map(async () => Buffer.from(await (await fetch(`${base}/api/lobbies/${L.code}/blobs/${gh.sounds[1].id}`)).arrayBuffer())));
+  ok(sha(b1) === gh.sounds[1].id && sha(b2) === gh.sounds[1].id && H.served === 2, 'Zwei gleichzeitige Downloads → Host schickt nur einmal');
+  H.delay = 0;
+  const ranged = await fetch(`${base}/api/lobbies/${L.code}/blobs/${gh.sounds[0].id}`, { headers: { Range: 'bytes=0-99' } });
+  ok(ranged.status === 206 && (await ranged.arrayBuffer()).byteLength === 100, 'Range-Anfrage liefert 206 mit 100 Bytes');
+  ok(!fs.existsSync(path.join(process.env.DATA_DIR || 'data', 'blobs')), 'Auf dem Server liegt kein Datei-Ordner');
+
+  // Gast hat die Datei jetzt auch → wenn der Host absagt, springt der Gast ein
+  G.offerFiles([{ id: gh.sounds[0].id, buf: blob }]);
+  await new Promise(r => setTimeout(r, 400));
+  const hostFiles = H.files; H.files = new Map();
+  const viaGuest = await fetch(`${base}/api/lobbies/${L.code}/blobs/${gh.sounds[0].id}`);
+  ok(viaGuest.ok && G.served >= 1, 'Host sagt ab (nosend) → ein anderer Gast mit der Datei schickt sie');
+  H.files = hostFiles;
+  // Gerät schickt Müll → wird abgewiesen
+  H.corrupt = true;
+  const before = H.served;
+  const bad = await fetch(`${base}/api/lobbies/${L.code}/blobs/${gh.sounds[1].id}`);
+  ok(bad.status === 404 && H.served === before + 1, 'Falsche Datei vom Gerät wird verworfen (Prüfsumme), nichts kommt beim Gast an');
+  H.corrupt = false;
+  H.offerFiles(L.sounds); // nach dem Fehler wieder melden
+  await new Promise(r => setTimeout(r, 400));
 
   const gPut = await fetch(`${base}/api/lobbies/${L.code}/sounds`, { method: 'PUT', body: '{"sounds":[]}' });
   ok(gPut.status === 401, 'Gast darf die Liste nicht ändern');
@@ -133,6 +170,7 @@ if (mode === 'host') {
   const L = await openLobby('Testhost', audioIn(arg));
   console.log('CODE', L.code);
   const H = client(L.code, 'Testhost', L.hostToken);
+  H.on('open', () => H.offerFiles(L.sounds));
   H.on('message', d => {
     const m = JSON.parse(d);
     log('←', m.type, JSON.stringify(m).slice(0, 160));
@@ -159,4 +197,115 @@ if (mode === 'guest') {
     if (m.type === 'offered') G.sendJ({ type: 'answer', req: m.req, ok: true });
   });
   setTimeout(() => process.exit(0), (+secs || 20) * 1000);
+}
+
+if (mode === 'clan-check') {
+  const pg = (await import('pg')).default;
+  const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  const api = async (p, method = 'GET', body, token) => {
+    const r = await fetch(`${base}/api/${p}`, { method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+      body: body ? JSON.stringify(body) : undefined });
+    return { ...(await r.json().catch(() => ({}))), http: r.status };
+  };
+  const stamp = Date.now().toString(36);
+  async function account(name) {
+    const email = `${name.toLowerCase()}-${stamp}@test.invalid`;
+    ok((await api('account/register', 'POST', { email, name, password: 'geheim123' })).ok, `${name} registriert`);
+    const { code } = (await db.query('SELECT code FROM email_codes WHERE email = $1', [email])).rows[0];
+    const v = await api('account/verify', 'POST', { email, code });
+    ok(!!v.token, `${name} bestätigt und angemeldet`);
+    return { email, token: v.token, id: v.user.id };
+  }
+  const device = async who => {
+    const D = client(null);
+    await D.opened;
+    D.sendJ({ type: 'auth', token: who.token });
+    await D.next('ready');
+    return D;
+  };
+  const files = audioIn('../windows/testdata').slice(0, 2).map(f => { const buf = fs.readFileSync(f); return { id: sha(buf), name: path.basename(f), size: buf.length, buf }; });
+
+  const A = await account('Anna'), B = await account('Ben');
+  const created = await api('clans', 'POST', { name: 'Testclan' }, A.token);
+  const clanId = created.clan.id;
+  ok((await api('clans/join', 'POST', { code: created.clan.inviteCode }, B.token)).http === 200, 'Ben fragt mit dem Invite-Code an');
+  await api(`clans/${clanId}/approve`, 'POST', { userId: B.id, ok: true }, A.token);
+  ok((await api(`clans/${clanId}`, 'GET', null, B.token)).clan.role === 'member', 'Anna gibt Ben frei');
+
+  const DA = await device(A);
+  ok((await DA.next('want')).sounds.length === 0, 'Annas Gerät verbunden, noch nichts zu suchen');
+  const bad = client(null); await bad.opened; bad.sendJ({ type: 'auth', token: 'falsch' });
+  ok((await bad.closed).code === 4401, 'Geräte-Verbindung mit falschem Token wird abgewiesen');
+
+  const add = await api(`clans/${clanId}/sounds`, 'POST', { sounds: files.map(({ buf, ...s }) => s) }, A.token);
+  ok(add.added === 2 && add.missing.length === 0, 'Anna teilt 2 Sounds – Server will keine Datei');
+  const want = await DA.next('want');
+  ok(want.sounds.length === 2, 'Annas Gerät soll nach den 2 Sounds suchen');
+  let list = await api(`clans/${clanId}/sounds`, 'GET', null, B.token);
+  ok(list.sounds.every(s => !s.available), 'Bevor das Gerät sie meldet: nicht verfügbar');
+  DA.offerFiles(files);
+  await new Promise(r => setTimeout(r, 300));
+  list = await api(`clans/${clanId}/sounds`, 'GET', null, B.token);
+  ok(list.sounds.length === 2 && list.sounds.every(s => s.available), 'Ben sieht beide als verfügbar');
+  const got = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + B.token } });
+  ok(got.ok && sha(Buffer.from(await got.arrayBuffer())) === files[0].id, 'Ben holt einen Clan-Sound direkt von Annas Gerät');
+  const stranger = await account('Fremd');
+  ok((await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + stranger.token } })).status === 403, 'Wer nicht im Clan ist, bekommt nichts');
+  const oldPut = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { method: 'PUT', headers: { Authorization: 'Bearer ' + A.token }, body: files[0].buf });
+  ok(oldPut.status === 410, 'Clan-Upload wie in alten Versionen wird abgelehnt (410)');
+
+  ok((await api(`clans/${clanId}/sounds/${files[1].id}`, 'DELETE', null, B.token)).http === 403, 'Ben (Mitglied) darf nicht löschen');
+  ok((await api(`clans/${clanId}/sounds/${files[1].id}`, 'DELETE', null, A.token)).ok, 'Anna (Admin) löscht einen Sound');
+  ok((await DA.next('want')).sounds.length === 1, 'Geräte bekommen die neue Liste');
+  ok((await api(`clans/${clanId}/sounds`, 'GET', null, B.token)).sounds.length === 1, 'Im Clan ist nur noch 1 Sound');
+
+  // Clan-Session
+  const sA = await api(`clans/${clanId}/session`, 'POST', null, A.token);
+  const sB = await api(`clans/${clanId}/session`, 'POST', null, B.token);
+  ok(sA.code && sA.code === sB.code && sA.ticket !== sB.ticket && !sA.hostToken, 'Beide bekommen dieselbe Session mit eigenem Ticket, ohne Host-Token');
+  const noTicket = client(sA.code, 'X');
+  ok((await noTicket.closed).code === 4401, 'Ohne Ticket kommt niemand in die Clan-Session');
+  const forged = client(sA.code, 'X', null, '&ticket=' + B.id + '.' + sA.ticket.split('.')[1]);
+  ok((await forged.closed).code === 4401, 'Ticket von Anna mit Bens Konto-ID wird abgewiesen');
+  const SA = client(sA.code, 'egal', null, '&ticket=' + sA.ticket);
+  const helloA = await SA.next('hello');
+  ok(!helloA.isHost && helloA.host === 'Testclan' && helloA.sounds.length === 1, 'Anna in der Session: kein Host, sieht den Clan-Sound');
+  const SB = client(sB.code, 'egal', null, '&ticket=' + sB.ticket);
+  const helloB = await SB.next('hello');
+  ok(helloB.members.some(m => m.name === 'Ben') && helloB.members.every(m => !m.host), 'Ben drin, Name kommt aus dem Konto');
+  const sessBlob = await fetch(`${base}/api/lobbies/${sB.code}/blobs/${files[0].id}`);
+  ok(sessBlob.ok && sha(Buffer.from(await sessBlob.arrayBuffer())) === files[0].id, 'Session-Sound kommt von Annas Gerät');
+  SB.sendJ({ type: 'ask', id: files[0].id });
+  ok((await SB.next('answered')).ok, 'Behalten in der Clan-Session geht ohne Nachfrage');
+  await api(`clans/${clanId}/sounds`, 'POST', { sounds: [files[1]].map(({ buf, ...s }) => s) }, B.token);
+  let ss;
+  do { ss = await SB.next('sounds'); } while (ss.sounds.length !== 2);
+  ok(true, 'Neuer Clan-Sound taucht in der laufenden Session auf');
+
+  DA.close();
+  do { ss = await SB.next('sounds'); } while (ss.sounds.length !== 0);
+  ok(true, 'Annas Gerät geht offline → Sounds verschwinden aus der Session');
+  const offline = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + B.token } });
+  ok(offline.status === 404 && /niemand online/.test((await offline.json()).error), 'Clan-Sound holen → „niemand online“');
+
+  // Konto löschen
+  ok((await api('account/delete', 'POST', { password: 'falsch' }, A.token)).http === 403, 'Löschen mit falschem Passwort geht nicht');
+  ok((await api('account/delete', 'POST', { password: 'geheim123' }, A.token)).ok, 'Anna löscht ihr Konto');
+  ok((await SA.closed).code === 4410, 'Annas Session-Verbindung wird beendet');
+  ok((await api('account/me', 'GET', null, A.token)).http === 401, 'Annas Token gilt nicht mehr');
+  const left = (await db.query('SELECT count(*)::int AS n FROM users WHERE email = $1', [A.email])).rows[0].n;
+  ok(left === 0, 'Anna ist aus der Datenbank verschwunden');
+  const view = await api(`clans/${clanId}`, 'GET', null, B.token);
+  ok(view.clan.owner && view.clan.role === 'admin', 'Clan gehört jetzt Ben (Admin)');
+  ok((await db.query('SELECT count(*)::int AS n FROM clan_sounds WHERE added_by = $1', [A.id])).rows[0].n === 0, 'Annas Name hängt an keinem Clan-Sound mehr');
+  ok((await api('account/delete', 'POST', { password: 'geheim123' }, B.token)).ok, 'Ben löscht sein Konto auch');
+  ok((await SB.closed).code === 4410, 'Bens Session ist zu');
+  ok((await db.query('SELECT count(*)::int AS n FROM clans WHERE id = $1', [clanId])).rows[0].n === 0, 'Clan ohne Mitglieder ist aufgelöst');
+
+  // Abmelden macht den Token ungültig
+  await api('account/logout', 'POST', null, stranger.token);
+  ok((await api('account/me', 'GET', null, stranger.token)).http === 401, 'Nach dem Abmelden gilt der Token nicht mehr');
+  await api('account/login', 'POST', { email: stranger.email, password: 'geheim123' }).then(r => api('account/delete', 'POST', { password: 'geheim123' }, r.token));
+  await db.end();
+  process.exit(0);
 }
