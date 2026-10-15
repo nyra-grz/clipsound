@@ -94,6 +94,15 @@ jobs:
             "Version der neuen exe: $((Get-Item upd\ClipSound.exe).VersionInfo.ProductVersion)"
           )
           $report | Tee-Object shots\update-test.txt
+          if (-not $ok) {
+            # Bildschirm fotografieren, um zu sehen, woran es hängt (z. B. ein Meldungsfenster)
+            Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+            $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+            $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+            [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+            $bmp.Save("$pwd\shots\update-haengt.png")
+            $running | Format-Table Id, StartTime, MainWindowTitle -AutoSize | Out-String | Write-Host
+          }
           $running | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $ok) { exit 1 }
 
