@@ -67,9 +67,9 @@ const AUDIO_TYPES = {
 };
 const STATIC_TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png', '.svg': 'image/svg+xml' };
 
-// Bis Version 2.4 lagen hochgeladene Sounds auf dem Volume. Die braucht niemand mehr – weg damit.
-const OLD_BLOBS = path.join(process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data'), 'blobs');
-fs.rmSync(OLD_BLOBS, { recursive: true, force: true });
+// Bis Version 2.4 lagen hochgeladene Sounds auf dem Volume (blobs/, davor sounds/). Die braucht niemand mehr – weg damit.
+const OLD_DATA = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
+for (const dir of ['blobs', 'sounds']) fs.rmSync(path.join(OLD_DATA, dir), { recursive: true, force: true });
 
 const db = new Pool({
   connectionString: process.env.DATABASE_URL,
