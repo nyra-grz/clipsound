@@ -65,8 +65,17 @@ public static class CustomIcon
             if (!File.Exists(FilePath)) return null;
             using var bmp = new System.Drawing.Bitmap(FilePath);
             using var small = new System.Drawing.Bitmap(bmp, new System.Drawing.Size(32, 32));
-            return System.Drawing.Icon.FromHandle(small.GetHicon());
+            var handle = small.GetHicon();
+            try
+            {
+                using var temp = System.Drawing.Icon.FromHandle(handle);
+                return (System.Drawing.Icon)temp.Clone(); // eigene Kopie, damit das Handle wieder frei wird
+            }
+            finally { DestroyIcon(handle); }
         }
         catch { return null; }
     }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr handle);
 }

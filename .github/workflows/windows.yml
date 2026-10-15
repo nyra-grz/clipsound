@@ -63,6 +63,7 @@ jobs:
           }
           Run @('--library', "$pwd\testlib\Sounds", '--snapshot', "$pwd\shots\1-normal.png", '--selftest', "$pwd\shots\selftest.txt", '--import-test', "$pwd\windows\testdata")
           Run @('--library', "$pwd\testlib\Sounds", '--size', '700x600', '--snapshot', "$pwd\shots\2-schmal.png", '--selftest', "$pwd\shots\selftest-schmal.txt")
+          Run @('--library', "$pwd\testlib\Sounds", '--size', '560x480', '--snapshot', "$pwd\shots\2b-ganz-schmal.png")
           Run @('--library', "$pwd\testlib\Sounds", '--recorder', '--snapshot', "$pwd\shots\3-taste.png")
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
           Run @('--library', "$pwd\testlib\Sounds", '--pretend-version', '1.0', '--snapshot', "$pwd\shots\5-update.png")
@@ -95,6 +96,18 @@ jobs:
           $report | Tee-Object shots\update-test.txt
           $running | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $ok) { exit 1 }
+
+      - name: Nur eine Instanz (zweiter Start holt das Fenster nach vorne)
+        shell: pwsh
+        run: |
+          $a = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds" -PassThru
+          Start-Sleep 6
+          $b = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds" -PassThru
+          $exited = $b.WaitForExit(15000)
+          $alive = -not $a.HasExited
+          "zweiter Start beendet sich: $exited, erste Instanz läuft weiter: $alive" | Tee-Object shots\eine-instanz.txt
+          Get-Process ClipSound -ErrorAction SilentlyContinue | Stop-Process -Force
+          if (-not ($exited -and $alive)) { exit 1 }
 
       - name: Globaler Kürzel Alt+2 (App im Hintergrund)
         shell: pwsh

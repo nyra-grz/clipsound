@@ -45,6 +45,7 @@ public partial class MainWindow : Window
     /// <summary>Wirklich beenden (Menü „Beenden“ oder Update) statt in den Infobereich</summary>
     public static bool Quitting { get; set; }
     private List<TileViewModel> _tiles = new();
+    private string _tilesKey = "";   // welche Kacheln gerade stehen – nur neu bauen, wenn sich das ändert
     private TileViewModel? _recording;
     private bool _loading = true;
     /// <summary>Bei Testläufen keine Meldungsfenster – die würden den Test blockieren.</summary>
@@ -55,15 +56,25 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        _saveTimer.Tick += (_, _) => { _saveTimer.Stop(); _settings.Save(); };
         if (Arg("--size")?.Split('x') is [var w, var h]) { Width = double.Parse(w); Height = double.Parse(h); }
 
         _library = new SoundLibrary(Arg("--library"));
         _keys = new KeyBindStore(Path.Combine(_library.SettingsFolder, "keybinds.json"));
         _account = new Account(Path.Combine(_library.SettingsFolder, "account.token"));
         _account.Attach(_library); // Clan-Sounds von diesem PC aus weitergeben
-        _library.Changed += () => _lobby.HostLibraryChanged(_library.Sounds); // als Host: Liste in der Lobby aktuell halten
+        _library.Changed += () =>
+        {
+            _lobby.HostLibraryChanged(_library.Sounds); // als Host: Liste in der Lobby aktuell halten
+            // Sounds kommen auch aus dem Clan-Fenster dazu („In meine Sounds“, „Im Clan teilen“) – dann hier zeigen
+            Dispatcher.BeginInvoke(() => { Render(); RegisterHotKeys(); });
+        };
 
-        try { _player = new SoundPlayer(); }
+        try
+        {
+            _player = new SoundPlayer();
+            if (!_player.HasOutput) _playerError = _player.OutputError ?? "unbekannt"; // kommt eins dazu, geht es von selbst
+        }
         catch (Exception ex) { _playerError = ex.Message; }
 
         Volume.Value = Math.Clamp(_settings.Volume, 0, SoundPlayer.MaxVolume);
@@ -99,7 +110,8 @@ public partial class MainWindow : Window
             if (!TestMode || HasArg("--pretend-version")) _ = CheckForUpdateAsync();
             // Meldung erst danach – ein Meldungsfenster darf den Start (und den Updater) nicht aufhalten
             if (_playerError is not null)
-                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => ShowError("Kein Audiogerät gefunden: " + _playerError));
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, () => ShowError(
+                    $"Kein Audiogerät gefunden ({_playerError}). Sobald Lautsprecher oder Kopfhörer da sind, spielt ClipSound von selbst darauf."));
         };
         Closing += (_, e) =>
         {
@@ -113,6 +125,8 @@ public partial class MainWindow : Window
                     _tray.ShowBalloonTip(4000, "ClipSound läuft weiter", "Deine Tastenkürzel gehen weiter. Beenden: Rechtsklick auf das Symbol → Beenden.", System.Windows.Forms.ToolTipIcon.Info);
                     _settings.TrayHintShown = true;
                 }
+                _settings.LobbyName = LobbyName.Text.Trim();
+                _settings.Save(); // falls Windows später einfach heruntergefahren wird
                 return;
             }
             _settings.LobbyName = LobbyName.Text.Trim();
@@ -124,9 +138,15 @@ public partial class MainWindow : Window
         if (!TestMode) SetUpTray();
         if (Arg("--icon") is { } icon) CustomIcon.Set(icon);
         ApplyIcon();
+        // Herunterfahren/Abmelden: richtig beenden (Einstellungen speichern, Symbol weg) statt nur verstecken
+        Application.Current.SessionEnding += (_, _) => { Quitting = true; Close(); };
 
         Render();
     }
+
+    /// <summary>Einstellungen kurz nach einer Änderung speichern (nicht erst beim Beenden)</summary>
+    private readonly DispatcherTimer _saveTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private void SaveSettingsSoon() { _saveTimer.Stop(); _saveTimer.Start(); }
 
     private static string? Arg(string name)
     {
@@ -149,8 +169,15 @@ public partial class MainWindow : Window
         if (InGuestLobby)
         {
             var lobbySounds = _lobby.Sounds.Where(s => q.Length == 0 || s.Title.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
-            _tiles = lobbySounds.Select(s => new TileViewModel(s.Local ?? new Sound(s.Name), s)).ToList();
-            Tiles.ItemsSource = _tiles;
+            // In der Lobby kommt ständig etwas (Leute, Lautstärke) – Kacheln nur neu bauen, wenn sich die Sounds ändern,
+            // sonst gehen offene Rechtsklick-Menüs zu
+            var key = "lobby|" + string.Join("|", lobbySounds.Select(s => s.Id + (s.Local is null ? "-" : "+")));
+            if (key != _tilesKey)
+            {
+                _tilesKey = key;
+                _tiles = lobbySounds.Select(s => new TileViewModel(s.Local ?? new Sound(s.Name), s)).ToList();
+                Tiles.ItemsSource = _tiles;
+            }
             int count = _lobby.Sounds.Count;
             CountText.Text = $"Lobby von {_lobby.HostName} · " + (count == 1 ? "1 Sound" : $"{count} Sounds");
             EmptyState.Visibility = Visibility.Collapsed;
@@ -160,14 +187,20 @@ public partial class MainWindow : Window
                 : $"Keine Treffer für „{q}“";
             Scroller.Visibility = _tiles.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
             UpdateProgress();
+            LayoutToolbar();
             return;
         }
         var sounds = string.IsNullOrEmpty(q)
             ? _library.Sounds
             : _library.Sounds.Where(s => s.FileName.Contains(q, StringComparison.OrdinalIgnoreCase) || s.Title.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList();
 
-        _tiles = sounds.Select(s => new TileViewModel(s)).ToList();
-        Tiles.ItemsSource = _tiles;
+        var ownKey = "own|" + string.Join("|", sounds.Select(s => s.Path));
+        if (ownKey != _tilesKey)
+        {
+            _tilesKey = ownKey;
+            _tiles = sounds.Select(s => new TileViewModel(s)).ToList();
+            Tiles.ItemsSource = _tiles;
+        }
         UpdateKeyBadges();
 
         int n = _library.Sounds.Count;
@@ -177,6 +210,51 @@ public partial class MainWindow : Window
         NoResultsText.Text = $"Keine Treffer für „{q}“";
         Scroller.Visibility = _tiles.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         UpdateProgress();
+        LayoutToolbar();
+    }
+
+    // ---------- Leiste ----------
+
+    private void Toolbar_SizeChanged(object sender, SizeChangedEventArgs e) { if (e.WidthChanged) LayoutToolbar(); }
+
+    /// <summary>Wenn es eng wird: erst den Zähler weglassen, dann nur Symbole auf den Knöpfen (Text im Tooltip);
+    /// reicht das nicht, bricht die Leiste in eine zweite Zeile um. Suche und Einstellungen bleiben immer sichtbar.</summary>
+    private void LayoutToolbar()
+    {
+        double avail = Toolbar.ActualWidth;
+        if (avail <= 0) return;
+        var inf = new Size(double.PositiveInfinity, double.PositiveInfinity);
+        bool Fits()
+        {
+            ToolbarButtons.Measure(inf);
+            ToolbarRight.Measure(inf);
+            return ToolbarButtons.DesiredSize.Width + ToolbarRight.DesiredSize.Width <= avail;
+        }
+        try
+        {
+            SetCompactToolbar(false); CountText.Visibility = Visibility.Visible;
+            if (Fits()) return;
+            CountText.Visibility = Visibility.Collapsed;
+            if (Fits()) return;
+            SetCompactToolbar(true); CountText.Visibility = Visibility.Visible;
+            if (Fits()) return;
+            CountText.Visibility = Visibility.Collapsed;
+        }
+        finally
+        {
+            ToolbarButtons.InvalidateMeasure();
+            ToolbarRight.InvalidateMeasure();
+        }
+    }
+
+    private void SetCompactToolbar(bool compact)
+    {
+        foreach (var button in new ContentControl[] { ImportBtn, StopBtn, LobbyBtn, AccountBtn, Overlap })
+        {
+            if (button.Content is not StackPanel { Children: [TextBlock icon, TextBlock label] }) continue;
+            label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+            icon.Margin = compact ? new Thickness(0) : new Thickness(0, 0, 8, 0);
+        }
     }
 
     private void UpdateKeyBadges()
@@ -219,7 +297,7 @@ public partial class MainWindow : Window
     private void PlayLocal(Sound sound, TimeSpan delay, string title)
     {
         LobbyLog($"play {sound.FileName} in {(int)delay.TotalMilliseconds} ms");
-        if (_player is null) { ShowError("Kein Audiogerät gefunden."); return; }
+        if (_player is null) { ShowError("Audio konnte nicht gestartet werden: " + _playerError); return; }
         if (Overlap.IsChecked != true) _player.StopAll();
         try
         {
@@ -283,13 +361,14 @@ public partial class MainWindow : Window
         VolumeText.SetResourceReference(TextBlock.ForegroundProperty,
             Volume.Value > 1.0001 ? "SystemFillColorCautionBrush" : "TextFillColorSecondaryBrush");
         _settings.Volume = Volume.Value;
+        SaveSettingsSoon();
     }
 
     private void VolumeText_Click(object sender, MouseButtonEventArgs e) => Volume.Value = 1;
 
     private void Overlap_Changed(object sender, RoutedEventArgs e)
     {
-        if (!_loading) _settings.Overlap = Overlap.IsChecked == true;
+        if (!_loading) { _settings.Overlap = Overlap.IsChecked == true; SaveSettingsSoon(); }
     }
 
     // ---------- Import ----------
@@ -591,6 +670,7 @@ public partial class MainWindow : Window
     {
         LobbyError.Visibility = Visibility.Collapsed;
         _settings.LobbyName = LobbyName.Text.Trim();
+        SaveSettingsSoon();
         _ = _lobby.OpenAsync(LobbyPersonName, _library.Sounds);
         UpdateLobbyUi();
     }
@@ -599,6 +679,7 @@ public partial class MainWindow : Window
     {
         LobbyError.Visibility = Visibility.Collapsed;
         _settings.LobbyName = LobbyName.Text.Trim();
+        SaveSettingsSoon();
         _closeLobbyPanelOnOpen = true;
         _lobby.Join(LobbyCode.Text, LobbyPersonName);
         UpdateLobbyUi();
@@ -752,12 +833,18 @@ public partial class MainWindow : Window
 
     private void Settings_Click(object sender, RoutedEventArgs e) => OpenSettings();
 
+    private AccountWindow? _accountWindow;
+
     private void Account_Click(object sender, RoutedEventArgs e)
     {
-        new AccountWindow(_account, _lobby, _library) { Owner = this }.Show();
+        if (_accountWindow is not null) { _accountWindow.Activate(); return; }
+        _accountWindow = new AccountWindow(_account, _lobby, _library) { Owner = this };
+        _accountWindow.Closed += (_, _) => { _accountWindow = null; Keyboard.Focus(this); };
+        _accountWindow.Show();
     }
 
-    private void ShowFromTray()
+    /// <summary>Fenster nach vorne holen (auch aus dem Infobereich, z. B. wenn ClipSound ein zweites Mal gestartet wird)</summary>
+    public void ShowFromTray()
     {
         Show();
         if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
@@ -922,7 +1009,7 @@ public partial class MainWindow : Window
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Sounds: {_library.Sounds.Count}, Kacheln: {_tiles.Count}, Fenster: {ActualWidth}x{ActualHeight}");
-        sb.AppendLine($"Audio: {(_player is null ? "kein Gerät – " + _playerError : "ok")}");
+        sb.AppendLine($"Audio: {(_player?.HasOutput == true ? "ok" : "kein Gerät – " + (_player?.OutputError ?? _playerError))}");
         if (_testErrors.Count > 0) sb.AppendLine("Meldungen: " + string.Join(" | ", _testErrors));
         sb.AppendLine("Tasten: " + string.Join(", ", _library.Sounds.Take(6).Select(s => $"{s.Title}={_keys.Binds.GetValueOrDefault(s.FileName)?.Display ?? "–"}")));
 

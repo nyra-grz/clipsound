@@ -1,4 +1,6 @@
 using System.IO;
+using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Vorbis;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
@@ -7,6 +9,9 @@ namespace ClipSound;
 
 /// <summary>
 /// Spielt Sounds über einen gemeinsamen Mixer ab. Die Master-Lautstärke geht bis 500 %.
+/// Die Ausgabe hängt am Standard-Audiogerät: Fehlt beim Start eins, wird es beim nächsten Abspielen
+/// erneut versucht; fällt es weg (Kopfhörer, Bluetooth) oder wechselt Windows das Standardgerät,
+/// startet die Ausgabe von selbst neu.
 /// </summary>
 public sealed class SoundPlayer : IDisposable
 {
@@ -15,18 +20,90 @@ public sealed class SoundPlayer : IDisposable
     private static readonly WaveFormat MixFormat = WaveFormat.CreateIeeeFloatWaveFormat(44100, 2);
     private readonly MixingSampleProvider _mixer = new(MixFormat) { ReadFully = true };
     private readonly GainProvider _master;
-    private readonly WaveOutEvent _output = new() { DesiredLatency = 80 };
     private readonly List<Voice> _voices = new();
     private readonly object _lock = new();
+    private readonly object _outLock = new();
+    private WaveOutEvent? _output;
+    private bool _disposed;
+    private MMDeviceEnumerator? _devices;
+    private DeviceWatch? _watch;
 
     /// <summary>Wird (im Audio-Thread) ausgelöst, wenn ein Sound fertig ist.</summary>
     public event Action<string>? Finished;
 
+    /// <summary>Gerade ist ein Ausgabegerät da</summary>
+    public bool HasOutput { get { lock (_outLock) return _output is not null; } }
+    /// <summary>Warum es keine Ausgabe gibt (z. B. kein Audiogerät)</summary>
+    public string? OutputError { get; private set; }
+
     public SoundPlayer()
     {
         _master = new GainProvider(_mixer);
-        _output.Init(_master);
-        _output.Play();
+        TryStartOutput();
+        try
+        {
+            // Standardgerät gewechselt (Kopfhörer rein, Bluetooth verbunden …) → dorthin umziehen
+            _devices = new MMDeviceEnumerator();
+            _watch = new DeviceWatch(() => Task.Run(RestartOutput));
+            _devices.RegisterEndpointNotificationCallback(_watch);
+        }
+        catch { _devices = null; _watch = null; }
+    }
+
+    private bool TryStartOutput()
+    {
+        lock (_outLock)
+        {
+            if (_disposed) return false;
+            if (_output is not null) return true;
+            WaveOutEvent? output = null;
+            try
+            {
+                output = new WaveOutEvent { DesiredLatency = 80 };
+                output.Init(_master);
+                var started = output;
+                output.PlaybackStopped += (_, _) => OnOutputStopped(started);
+                output.Play();
+                _output = output;
+                OutputError = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                try { output?.Dispose(); } catch { }
+                OutputError = ex.Message;
+                return false;
+            }
+        }
+    }
+
+    /// <summary>Gerät ist weg oder hat einen Fehler gemeldet: auf dem (neuen) Standardgerät weitermachen.</summary>
+    private void OnOutputStopped(WaveOutEvent output)
+    {
+        lock (_outLock)
+        {
+            if (_output != output) return; // schon ersetzt
+            _output = null;
+        }
+        Task.Run(() =>
+        {
+            try { output.Dispose(); } catch { }
+            Thread.Sleep(300);
+            if (!TryStartOutput()) StopAll(); // kein Gerät mehr: laufende Sounds nicht ewig „spielen“ lassen
+        });
+    }
+
+    private void RestartOutput()
+    {
+        WaveOutEvent? old;
+        lock (_outLock)
+        {
+            if (_disposed) return;
+            old = _output;
+            _output = null;
+        }
+        try { old?.Dispose(); } catch { }
+        TryStartOutput();
     }
 
     public double Volume
@@ -104,6 +181,7 @@ public sealed class SoundPlayer : IDisposable
     /// <param name="delay">Start erst nach dieser Zeit (Lobby: alle starten gleichzeitig)</param>
     public void Play(Sound sound, TimeSpan delay = default)
     {
+        if (!TryStartOutput()) throw new InvalidOperationException("Kein Audiogerät gefunden" + (OutputError is null ? "." : $" ({OutputError})."));
         var source = Open(sound.Path, out var reader, out var total);
 
         // Auf das Mixer-Format bringen: Kanäle und Abtastrate
@@ -172,8 +250,25 @@ public sealed class SoundPlayer : IDisposable
 
     public void Dispose()
     {
+        WaveOutEvent? output;
+        lock (_outLock) { _disposed = true; output = _output; _output = null; }
+        try { if (_watch is not null) _devices?.UnregisterEndpointNotificationCallback(_watch); } catch { }
+        _devices?.Dispose();
         StopAll();
-        _output.Dispose();
+        output?.Dispose();
+    }
+
+    /// <summary>Meldet, wenn Windows das Standard-Ausgabegerät wechselt (kommt auf einem COM-Thread).</summary>
+    private sealed class DeviceWatch(Action changed) : IMMNotificationClient
+    {
+        public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+        {
+            if (flow == DataFlow.Render && role == Role.Multimedia) changed();
+        }
+        public void OnDeviceStateChanged(string deviceId, DeviceState newState) { }
+        public void OnDeviceAdded(string pwstrDeviceId) { }
+        public void OnDeviceRemoved(string deviceId) { }
+        public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key) { }
     }
 
     /// <summary>Ein laufender Sound. Meldet sich ab, wenn die Datei zu Ende ist.</summary>
@@ -198,7 +293,10 @@ public sealed class SoundPlayer : IDisposable
         public int Read(float[] buffer, int offset, int count)
         {
             if (Volatile.Read(ref _ended) == 1) return 0;
-            int n = _source.Read(buffer, offset, count);
+            int n;
+            // Eine kaputte Stelle in einer Datei darf nicht die ganze Ausgabe anhalten
+            try { n = _source.Read(buffer, offset, count); }
+            catch { Stop(); return 0; }
             Interlocked.Add(ref _read, n);
             if (n < count) Stop(); // Datei zu Ende – der Mixer entfernt uns bei 0
             return n;

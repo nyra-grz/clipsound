@@ -110,16 +110,15 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <!-- Befehlsleiste -->
-        <Grid Margin="16,12,16,8">
+        <!-- Befehlsleiste: links bricht um, wenn es eng wird; Suche und Einstellungen bleiben rechts immer sichtbar -->
+        <Grid x:Name="Toolbar" Margin="16,12,16,4" SizeChanged="Toolbar_SizeChanged">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <WrapPanel VerticalAlignment="Center">
-                <Button x:Name="ImportBtn" Style="{DynamicResource AccentButtonStyle}" Click="Import_Click" Margin="0,0,8,0"
+            <WrapPanel x:Name="ToolbarButtons" VerticalAlignment="Top">
+                <Button x:Name="ImportBtn" Style="{DynamicResource AccentButtonStyle}" Click="Import_Click" Margin="0,0,8,4"
                         ToolTip="Sound-Dateien oder einen Ordner importieren (Strg+O)">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -132,34 +131,34 @@
                         </ContextMenu>
                     </Button.ContextMenu>
                 </Button>
-                <Button x:Name="StopBtn" Click="Stop_Click" Margin="0,0,8,0" ToolTip="Alles stoppen (Esc)" IsEnabled="False">
+                <Button x:Name="StopBtn" Click="Stop_Click" Margin="0,0,8,4" ToolTip="Alles stoppen (Esc)" IsEnabled="False">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE71A;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Text="Stop"/>
                     </StackPanel>
                 </Button>
-                <Button x:Name="LobbyBtn" Click="Lobby_Click" Margin="0,0,8,0"
+                <Button x:Name="LobbyBtn" Click="Lobby_Click" Margin="0,0,8,4"
                         ToolTip="Zusammen abspielen: Lobby öffnen oder mit Code beitreten (auch mit Mac und Browser)">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE716;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Text="Lobby"/>
                     </StackPanel>
                 </Button>
-                <Button x:Name="AccountBtn" Click="Account_Click" Margin="0,0,8,0"
+                <Button x:Name="AccountBtn" Click="Account_Click" Margin="0,0,8,4"
                         ToolTip="Konto &amp; Clans: anmelden und mit deinem Clan zusammen abspielen">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE77B;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Text="Clans"/>
                     </StackPanel>
                 </Button>
-                <ToggleButton x:Name="Overlap" Margin="0,0,16,0" ToolTip="Mehrere Sounds gleichzeitig abspielen"
+                <ToggleButton x:Name="Overlap" Margin="0,0,16,4" ToolTip="Mehrere Sounds gleichzeitig abspielen"
                               Checked="Overlap_Changed" Unchecked="Overlap_Changed">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8C8;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center" Margin="0,0,8,0"/>
                         <TextBlock Text="Überlappen"/>
                     </StackPanel>
                 </ToggleButton>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" ToolTip="Lautstärke · Klick auf die Zahl = 100 %">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,8,4" Height="32" ToolTip="Lautstärke · Klick auf die Zahl = 100 %">
                     <TextBlock x:Name="SpeakerIcon" Text="&#xE767;" FontFamily="{StaticResource IconFont}" VerticalAlignment="Center"
                                Foreground="{DynamicResource TextFillColorSecondaryBrush}"
                                Background="Transparent" MouseLeftButtonDown="SpeakerIcon_MouseDown"/>
@@ -171,12 +170,11 @@
                 </StackPanel>
             </WrapPanel>
 
-            <TextBlock x:Name="CountText" Grid.Column="1" Text="" Margin="16,0" VerticalAlignment="Center" HorizontalAlignment="Right"
-                       Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
-
-            <!-- Suche + Einstellungen -->
-            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
-                <Grid Width="200" VerticalAlignment="Center">
+            <!-- Zähler + Suche + Einstellungen -->
+            <StackPanel x:Name="ToolbarRight" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top" Margin="0,0,0,4">
+                <TextBlock x:Name="CountText" Text="" Margin="8,0,16,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" MaxWidth="260"
+                           Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
+                <Grid x:Name="SearchBox" Width="200" VerticalAlignment="Center">
                     <TextBox x:Name="Search" TextChanged="Search_TextChanged" VerticalContentAlignment="Center"/>
                     <TextBlock x:Name="SearchPlaceholder" Text="Suchen (Strg+F)" Margin="12,0,0,0" VerticalAlignment="Center"
                                IsHitTestVisible="False" Foreground="{DynamicResource TextFillColorTertiaryBrush}"/>
