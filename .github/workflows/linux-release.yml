@@ -1,0 +1,113 @@
+name: Linux-Release prüfen
+
+# Startet die veröffentlichten Linux-Archive so, wie ein Nutzer es tut: entpacken, ohne Schalter starten
+# (X11 und Wayland), install.sh, über den Menüeintrag starten – auf mehreren Distributionen, x64 und arm64.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release-Tag (leer = neuestes)'
+        required: false
+
+jobs:
+  start:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+        image: ['ubuntu:26.04', 'ubuntu:24.04', 'debian:trixie', 'fedora:latest']
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Archiv laden
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          arch=$([ "$(uname -m)" = aarch64 ] && echo arm64 || echo x64)
+          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          mkdir -p w/out
+          gh release download ${tag:+"$tag"} -R ${{ github.repository }} -p "ClipSound-Linux-$arch.tar.gz" -O w/app.tar.gz
+          ls -la w
+
+      - name: Prüfskript
+        run: |
+          cat > w/setup.sh <<'EOF'
+          set -e
+          if command -v apt-get >/dev/null; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends libgtk-4-1 libadwaita-1-0 adwaita-icon-theme librsvg2-common \
+              libgl1-mesa-dri libegl1 xvfb dbus-x11 imagemagick weston libglib2.0-bin shared-mime-info file \
+              desktop-file-utils procps xdg-user-dirs ca-certificates >/dev/null
+          else
+            dnf install -y -q gtk4 libadwaita adwaita-icon-theme librsvg2 mesa-dri-drivers mesa-libEGL xorg-x11-server-Xvfb \
+              dbus-x11 ImageMagick weston glib2 shared-mime-info file desktop-file-utils procps-ng xdg-user-dirs >/dev/null
+          fi
+          . /etc/os-release; echo "System: $PRETTY_NAME ($(uname -m))"
+          echo "GTK $(pkg-config --modversion gtk4 2>/dev/null || ls /usr/lib*/libgtk-4.so.1.* /usr/lib/*/libgtk-4.so.1.* 2>/dev/null | head -1)"
+          echo "libadwaita $(ls /usr/lib*/libadwaita-1.so.0.* /usr/lib/*/libadwaita-1.so.0.* 2>/dev/null | head -1)"
+          useradd -m tester
+          chmod -R a+rwX /w
+          runuser -u tester -- bash /w/test.sh
+          EOF
+
+          cat > w/test.sh <<'EOF'
+          cd ~
+          out=/w/out
+          tar xzf /w/app.tar.gz
+          export XDG_RUNTIME_DIR=/tmp/rt-$(id -u); mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          eval "$(dbus-launch --sh-syntax)"
+          xdg-user-dirs-update >/dev/null 2>&1 || true
+          A=~/ClipSound/ClipSound
+          ok=1
+
+          echo "== Dateityp (Doppelklick im Dateimanager)"
+          file -b "$A"
+          ct=$(gio info -a standard::content-type "$A" | awk '/content-type/ {print $2}')
+          echo "MIME-Typ: $ct"
+          # Nautilus startet nur Typen, die application/x-executable sind (oder davon abgeleitet)
+          chain="$ct"; t="$ct"
+          for i in 1 2 3 4; do t=$(awk -v t="$t" '$1==t {print $2; exit}' /usr/share/mime/subclasses); [ -z "$t" ] && break; chain="$chain > $t"; done
+          echo "Vererbung: $chain"
+          case "$chain" in *application/x-executable*) echo "Dateimanager: startbar";; *) echo "Dateimanager: NICHT startbar per Doppelklick";; esac
+
+          check() { # name pid log
+            sleep 20
+            if kill -0 "$2" 2>/dev/null; then echo "$1: läuft"; else wait "$2"; echo "$1: BEENDET (Exit $?)"; ok=0; fi
+            grep -iE "critical|unhandled|exception|error|fehl" "$3" | head -20
+          }
+
+          echo "== X11, ohne Schalter"
+          Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & sleep 2
+          DISPLAY=:99 "$A" > $out/x11.log 2>&1 & p=$!
+          check X11 $p $out/x11.log
+          DISPLAY=:99 import -window root $out/x11.png 2>/dev/null
+          kill $p 2>/dev/null; sleep 2; pkill -f "$A"; sleep 1
+
+          echo "== Wayland, ohne Schalter"
+          weston --backend=headless --socket=wl-test --idle-time=0 > $out/weston.log 2>&1 & sleep 3
+          env -u DISPLAY WAYLAND_DISPLAY=wl-test XDG_SESSION_TYPE=wayland "$A" > $out/wayland.log 2>&1 & p=$!
+          check Wayland $p $out/wayland.log
+          kill $p 2>/dev/null; sleep 2; pkill -f "$A"; sleep 1
+
+          echo "== install.sh, dann über den Menüeintrag"
+          ~/ClipSound/install.sh
+          DISPLAY=:99 gio launch ~/.local/share/applications/at.timur.ClipSound.desktop > $out/menu.log 2>&1
+          sleep 3
+          p=$(pgrep -f "/.local/share/clipsound/ClipSound" | head -1)
+          if [ -z "$p" ]; then echo "Menüeintrag: BEENDET sofort"; ok=0; cat $out/menu.log; else check Menüeintrag $p $out/menu.log; fi
+          DISPLAY=:99 import -window root $out/menu.png 2>/dev/null
+          pkill -f clipsound/ClipSound
+
+          [ $ok = 1 ]
+          EOF
+
+      - name: Starten (${{ matrix.image }})
+        run: docker run --rm -v "$PWD/w:/w" ${{ matrix.image }} bash /w/setup.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: start-${{ matrix.runner }}-${{ strategy.job-index }}
+          path: w/out
