@@ -14,10 +14,14 @@ namespace ClipSound;
 
 public sealed record AccountUser(string Id, string Email, string Name);
 public sealed record ClanSummary(string Id, string Name, string Role, int Members) { public bool IsAdmin => Role == "admin"; }
-public sealed record ClanMember(string Id, string Name, string Role);
-public sealed record ClanRequest(string UserId, string Name, string Email);
+/// <param name="Online">ClipSound ist bei der Person gerade offen</param>
+public sealed record ClanMember(string Id, string Name, string Role, bool Owner = false, bool Online = false, bool InSession = false)
+{
+    public bool IsAdmin => Role == "admin";
+}
 /// <param name="Available">Gerade ist jemand online, der ihn auf dem Gerät hat</param>
-public sealed record ClanSound(string Id, string Name, long Size, bool Available = true)
+/// <param name="By">Wer ihn geteilt hat</param>
+public sealed record ClanSound(string Id, string Name, long Size, bool Available = true, string? By = null)
 {
     public string Title => Regex.Replace(Path.GetFileNameWithoutExtension(Name), "[-_]+", " ");
 }
@@ -191,7 +195,7 @@ public sealed class Account
     }
 }
 
-/// <summary>Eine geöffnete Clan-Seite: Mitglieder, Anfragen, Clan-Sounds, Session.</summary>
+/// <summary>Eine geöffnete Clan-Seite (wie ein Discord-Server): Session, Einladung, Clan-Sounds, Mitglieder.</summary>
 public sealed class ClanRoom
 {
     private readonly Account _account;
@@ -205,10 +209,16 @@ public sealed class ClanRoom
     public string? InviteCode { get; private set; }
     public string? SessionCode { get; private set; }
     public List<ClanMember> Members { get; private set; } = new();
-    public List<ClanRequest> Requests { get; private set; } = new();
     public List<ClanSound> Sounds { get; private set; } = new();
     public string? Note { get; set; }
+    /// <summary>Nicht mehr im Clan (entfernt, ausgetreten, aufgelöst)</summary>
+    public bool Gone { get; private set; }
     public bool IsAdmin => Role == "admin";
+    public string? MyId => _account.User?.Id;
+    public int OnlineCount => Members.Count(m => m.Online);
+    /// <summary>Zum Weitergeben, öffnet eine Einladungsseite</summary>
+    public string? InviteLink => InviteCode is null ? null : new Uri(Account.Server, $"c/{InviteCode}").ToString();
+    public Account Account => _account;
     public string LibraryFolder => _library.Folder;
     public event Action? Changed;
 
@@ -221,7 +231,8 @@ public sealed class ClanRoom
 
     public async Task LoadAsync()
     {
-        var (obj, _) = await _account.ApiAsync($"api/clans/{ClanId}");
+        var (obj, err) = await _account.ApiAsync($"api/clans/{ClanId}");
+        if (err is not null && (err.Contains("nicht in diesem Clan") || err.Contains("gibt es nicht"))) { Gone = true; Notify(); return; }
         if (obj is not null)
         {
             var c = obj["clan"];
@@ -235,29 +246,42 @@ public sealed class ClanRoom
             }
             Members = new();
             if (obj["members"] is JsonArray ms)
-                foreach (var m in ms) if (m is not null) Members.Add(new ClanMember((string?)m["id"] ?? "", (string?)m["name"] ?? "", (string?)m["role"] ?? "member"));
-            Requests = new();
-            if (obj["requests"] is JsonArray rs)
-                foreach (var r in rs) if (r is not null) Requests.Add(new ClanRequest((string?)r["userId"] ?? "", (string?)r["name"] ?? "", (string?)r["email"] ?? ""));
+                foreach (var m in ms) if (m is not null)
+                    Members.Add(new ClanMember((string?)m["id"] ?? "", (string?)m["name"] ?? "", (string?)m["role"] ?? "member",
+                        (bool?)m["owner"] ?? false, (bool?)m["online"] ?? false, (bool?)m["inSession"] ?? false));
+            Members = Members.OrderByDescending(m => m.Online).ThenBy(m => m.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
         }
         var (so, _) = await _account.ApiAsync($"api/clans/{ClanId}/sounds");
         Sounds = new();
         if (so?["sounds"] is JsonArray sa)
-            foreach (var s in sa) if (s is not null) Sounds.Add(new ClanSound((string?)s["id"] ?? "", (string?)s["name"] ?? "", (long?)s["size"] ?? 0, (bool?)s["available"] ?? true));
+            foreach (var s in sa) if (s is not null) Sounds.Add(new ClanSound((string?)s["id"] ?? "", (string?)s["name"] ?? "", (long?)s["size"] ?? 0, (bool?)s["available"] ?? true, (string?)s["by"]));
         Notify();
-    }
-
-    public async Task ApproveAsync(string userId, bool ok)
-    {
-        await _account.ApiAsync($"api/clans/{ClanId}/approve", HttpMethod.Post, new { userId, ok });
-        await LoadAsync();
     }
 
     public async Task RotateInviteAsync()
     {
-        var (obj, _) = await _account.ApiAsync($"api/clans/{ClanId}/invite", HttpMethod.Post);
-        InviteCode = (string?)obj?["inviteCode"];
-        Note = "Neuer Invite-Code: " + (InviteCode ?? "-");
+        var (obj, err) = await _account.ApiAsync($"api/clans/{ClanId}/invite", HttpMethod.Post);
+        if (err is null) InviteCode = (string?)obj?["inviteCode"];
+        Note = err ?? $"Neuer Code: {InviteCode}. Der alte gilt nicht mehr.";
+        Notify();
+    }
+
+    /// <summary>Jemanden aus dem Clan entfernen (nur Admins, den Besitzer nicht).</summary>
+    public async Task KickAsync(ClanMember m)
+    {
+        var (_, err) = await _account.ApiAsync($"api/clans/{ClanId}/kick", HttpMethod.Post, new { userId = m.Id });
+        Note = err ?? $"{m.Name} ist nicht mehr im Clan.";
+        await LoadAsync();
+    }
+
+    /// <summary>Clan verlassen (alle außer dem Besitzer) bzw. auflösen (nur der Besitzer).</summary>
+    public async Task LeaveOrDissolveAsync()
+    {
+        var (_, err) = await _account.ApiAsync($"api/clans/{ClanId}/{(Owner ? "delete" : "leave")}", HttpMethod.Post);
+        if (err is not null) { Note = err; Notify(); return; }
+        if (_lobby.Active && _lobby.Code == SessionCode) _lobby.Leave();
+        Gone = true;
+        await _account.RefreshMeAsync();
         Notify();
     }
 
@@ -290,6 +314,7 @@ public sealed class ClanRoom
         var skipped = obj?["skipped"]?.AsArray().Count ?? 0;
         Note = err ?? (skipped > 0 ? $"{skipped} Sound(s) zu groß für den Clan (max. 15 MB pro Sound, 150 MB gesamt)."
             : "Geteilt. Die anderen bekommen die Sounds direkt von deinem PC, solange ClipSound bei dir läuft.");
+        _account.Share.Refresh(); // gleich melden, dass sie hier liegen – sonst stehen sie kurz als „nicht verfügbar“ da
         await LoadAsync();
     }
 
@@ -304,6 +329,13 @@ public sealed class ClanRoom
     /// <summary>Clan-Sound in die eigenen (Solo-)Sounds übernehmen – kommt direkt vom Gerät eines Mitglieds.</summary>
     public async Task TakeToSoloAsync(ClanSound s)
     {
+        var mine = _library.Sounds.Select(x => x.Path).ToList();
+        if (await Task.Run(() => mine.Any(p => { try { return new FileInfo(p).Length == s.Size && FileHash.Sha256(p) == s.Id; } catch { return false; } })))
+        {
+            Note = $"„{s.Title}“ ist schon in deinen Sounds.";
+            Notify();
+            return;
+        }
         var req = new HttpRequestMessage(HttpMethod.Get, new Uri(Account.Server, $"api/clans/{ClanId}/blobs/{s.Id}"));
         if (!string.IsNullOrEmpty(_account.Token)) req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _account.Token);
         try

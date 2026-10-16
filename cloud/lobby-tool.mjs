@@ -21,6 +21,7 @@ async function serve(ws, m) {
   const buf = ws.files?.get(m.id);
   ws.served = (ws.served || 0) + 1;
   if (ws.delay) await new Promise(r => setTimeout(r, ws.delay));
+  if (ws.silent) return; // Test: Gerät, das nicht mehr reagiert
   if (!buf) return ws.sendJ({ type: 'nosend', rid: m.rid });
   await fetch(`${base}/api/relay/${m.rid}`, { method: 'PUT', body: ws.corrupt ? Buffer.from('kaputt-kaputt-kaputt') : buf });
 }
@@ -216,10 +217,10 @@ if (mode === 'clan-check') {
     ok(!!v.token, `${name} bestätigt und angemeldet`);
     return { email, token: v.token, id: v.user.id };
   }
-  const device = async who => {
+  const device = async (who, deviceId) => {
     const D = client(null);
     await D.opened;
-    D.sendJ({ type: 'auth', token: who.token });
+    D.sendJ({ type: 'auth', token: who.token, device: deviceId });
     await D.next('ready');
     return D;
   };
@@ -228,25 +229,43 @@ if (mode === 'clan-check') {
   const A = await account('Anna'), B = await account('Ben');
   const created = await api('clans', 'POST', { name: 'Testclan' }, A.token);
   const clanId = created.clan.id;
-  ok((await api('clans/join', 'POST', { code: created.clan.inviteCode }, B.token)).http === 200, 'Ben fragt mit dem Invite-Code an');
-  await api(`clans/${clanId}/approve`, 'POST', { userId: B.id, ok: true }, A.token);
-  ok((await api(`clans/${clanId}`, 'GET', null, B.token)).clan.role === 'member', 'Anna gibt Ben frei');
+  const invite = created.clan.inviteCode;
+  const info = await api(`clans/invite/${invite}`);
+  ok(info.clan?.name === 'Testclan' && info.clan.members === 1, 'Einladung ist ohne Konto lesbar (Name, 1 Mitglied)');
+  ok((await fetch(`${base}/c/${invite}`)).status === 200, 'Einladungsseite …/c/CODE antwortet');
+  ok((await api('clans/invite/ZZZZZZZZ')).http === 404, 'Falscher Einladungscode → 404');
+  const joined = await api('clans/join', 'POST', { code: `${base}/c/${invite.toLowerCase()}` }, B.token);
+  ok(joined.status === 'member' && joined.clanName === 'Testclan', 'Ben tritt mit dem Link bei und ist sofort drin (wie Discord)');
+  const view0 = await api(`clans/${clanId}`, 'GET', null, B.token);
+  ok(view0.clan.role === 'member' && view0.clan.inviteCode === invite && view0.requests.length === 0, 'Ben ist Mitglied und sieht den Invite-Code zum Weitergeben');
+  ok((await api(`clans/${clanId}/approve`, 'POST', { userId: B.id, ok: true }, A.token)).http === 404, 'Freigeben gibt es nicht mehr');
 
-  const DA = await device(A);
+  const DA = await device(A, 'annas-mac');
   ok((await DA.next('want')).sounds.length === 0, 'Annas Gerät verbunden, noch nichts zu suchen');
+  await new Promise(r => setTimeout(r, 200));
+  const view1 = await api(`clans/${clanId}`, 'GET', null, B.token);
+  ok(view1.members.find(m => m.id === A.id)?.online === true && view1.members.find(m => m.id === B.id)?.online === false,
+    'Mitgliederliste zeigt: Anna online, Ben offline');
+  const DA2 = await device(A, 'annas-mac');
+  ok((await DA.closed).code === 4001, 'Gleiches Gerät verbindet sich neu → alte (verwaiste) Verbindung wird ersetzt');
+  DA2.close();
+  const DA3 = await device(A, 'annas-mac');
+  await DA3.next('want');
+
   const bad = client(null); await bad.opened; bad.sendJ({ type: 'auth', token: 'falsch' });
   ok((await bad.closed).code === 4401, 'Geräte-Verbindung mit falschem Token wird abgewiesen');
 
   const add = await api(`clans/${clanId}/sounds`, 'POST', { sounds: files.map(({ buf, ...s }) => s) }, A.token);
   ok(add.added === 2 && add.missing.length === 0, 'Anna teilt 2 Sounds – Server will keine Datei');
-  const want = await DA.next('want');
+  ok((await DA3.next('clan')).clanId === clanId, 'Geräte bekommen ein Live-Update „Clan geändert“');
+  const want = await DA3.next('want');
   ok(want.sounds.length === 2, 'Annas Gerät soll nach den 2 Sounds suchen');
   let list = await api(`clans/${clanId}/sounds`, 'GET', null, B.token);
   ok(list.sounds.every(s => !s.available), 'Bevor das Gerät sie meldet: nicht verfügbar');
-  DA.offerFiles(files);
+  DA3.offerFiles(files);
   await new Promise(r => setTimeout(r, 300));
   list = await api(`clans/${clanId}/sounds`, 'GET', null, B.token);
-  ok(list.sounds.length === 2 && list.sounds.every(s => s.available), 'Ben sieht beide als verfügbar');
+  ok(list.sounds.length === 2 && list.sounds.every(s => s.available && s.by === 'Anna'), 'Ben sieht beide als verfügbar, „von Anna“');
   const got = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + B.token } });
   ok(got.ok && sha(Buffer.from(await got.arrayBuffer())) === files[0].id, 'Ben holt einen Clan-Sound direkt von Annas Gerät');
   const stranger = await account('Fremd');
@@ -256,7 +275,7 @@ if (mode === 'clan-check') {
 
   ok((await api(`clans/${clanId}/sounds/${files[1].id}`, 'DELETE', null, B.token)).http === 403, 'Ben (Mitglied) darf nicht löschen');
   ok((await api(`clans/${clanId}/sounds/${files[1].id}`, 'DELETE', null, A.token)).ok, 'Anna (Admin) löscht einen Sound');
-  ok((await DA.next('want')).sounds.length === 1, 'Geräte bekommen die neue Liste');
+  ok((await DA3.next('want')).sounds.length === 1, 'Geräte bekommen die neue Liste');
   ok((await api(`clans/${clanId}/sounds`, 'GET', null, B.token)).sounds.length === 1, 'Im Clan ist nur noch 1 Sound');
 
   // Clan-Session
@@ -282,11 +301,37 @@ if (mode === 'clan-check') {
   do { ss = await SB.next('sounds'); } while (ss.sounds.length !== 2);
   ok(true, 'Neuer Clan-Sound taucht in der laufenden Session auf');
 
-  DA.close();
+  DA3.close();
   do { ss = await SB.next('sounds'); } while (ss.sounds.length !== 0);
   ok(true, 'Annas Gerät geht offline → Sounds verschwinden aus der Session');
   const offline = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + B.token } });
   ok(offline.status === 404 && /niemand online/.test((await offline.json()).error), 'Clan-Sound holen → „niemand online“');
+
+  // Gerät, das nicht mehr antwortet, wird nach 8 s gekappt und nicht wieder gefragt
+  const DB = await device(B, 'bens-pc');
+  await DB.next('want');
+  DB.silent = true;
+  DB.offerFiles([files[0]]);
+  await new Promise(r => setTimeout(r, 300));
+  const t0 = Date.now();
+  const stuck = await fetch(`${base}/api/clans/${clanId}/blobs/${files[0].id}`, { headers: { Authorization: 'Bearer ' + A.token } });
+  const gone = await DB.closed;
+  ok(stuck.status === 404 && Date.now() - t0 < 12000 && gone.code === 1006, 'Gerät antwortet nicht → nach ~8 s gekappt, Anfrage endet sauber');
+  ok(!(await api(`clans/${clanId}/sounds`, 'GET', null, A.token)).sounds.some(s => s.available), 'Danach gilt der Sound wieder als nicht verfügbar');
+
+  // Entfernen (Admin), Wiederkommen mit dem Link, Besitzer ist geschützt
+  ok((await api(`clans/${clanId}/kick`, 'POST', { userId: A.id }, B.token)).http === 403, 'Mitglied kann niemanden entfernen');
+  const DBen = await device(B, 'bens-pc');
+  await DBen.next('want');
+  ok((await api(`clans/${clanId}/kick`, 'POST', { userId: B.id }, A.token)).ok, 'Anna (Admin) entfernt Ben');
+  let ev; do { ev = await DBen.next('clan'); } while (ev.clanId !== clanId);
+  ok((await SB.closed).code === 4410, 'Bens Session-Verbindung wird beendet, sein Gerät bekommt ein Update');
+  ok((await api(`clans/${clanId}`, 'GET', null, B.token)).http === 403, 'Ben sieht den Clan nicht mehr');
+  ok((await api('clans/join', 'POST', { code: invite }, B.token)).status === 'member', 'Mit dem Code ist Ben wieder drin');
+  const rotated = await api(`clans/${clanId}/invite`, 'POST', null, A.token);
+  ok(rotated.inviteCode && rotated.inviteCode !== invite && (await api('clans/join', 'POST', { code: invite }, A.token)).http === 404,
+    'Neuer Invite-Code → der alte gilt nicht mehr');
+  DBen.close();
 
   // Konto löschen
   ok((await api('account/delete', 'POST', { password: 'falsch' }, A.token)).http === 403, 'Löschen mit falschem Passwort geht nicht');
@@ -299,8 +344,16 @@ if (mode === 'clan-check') {
   ok(view.clan.owner && view.clan.role === 'admin', 'Clan gehört jetzt Ben (Admin)');
   ok((await db.query('SELECT count(*)::int AS n FROM clan_sounds WHERE added_by = $1', [A.id])).rows[0].n === 0, 'Annas Name hängt an keinem Clan-Sound mehr');
   ok((await api('account/delete', 'POST', { password: 'geheim123' }, B.token)).ok, 'Ben löscht sein Konto auch');
-  ok((await SB.closed).code === 4410, 'Bens Session ist zu');
   ok((await db.query('SELECT count(*)::int AS n FROM clans WHERE id = $1', [clanId])).rows[0].n === 0, 'Clan ohne Mitglieder ist aufgelöst');
+
+  // Besitzer löst einen Clan auf
+  const C1 = await account('Cleo'), C2 = await account('Cem');
+  const c2 = await api('clans', 'POST', { name: 'Kurzclan' }, C1.token);
+  await api('clans/join', 'POST', { code: c2.clan.inviteCode }, C2.token);
+  ok((await api(`clans/${c2.clan.id}/delete`, 'POST', null, C2.token)).http === 403, 'Nur der Besitzer kann auflösen');
+  ok((await api(`clans/${c2.clan.id}/delete`, 'POST', null, C1.token)).ok, 'Besitzer löst den Clan auf');
+  ok((await api('account/me', 'GET', null, C2.token)).clans.length === 0, 'Bei den anderen ist der Clan weg');
+  for (const who of [C1, C2]) await api('account/delete', 'POST', { password: 'geheim123' }, who.token);
 
   // Abmelden macht den Token ungültig
   await api('account/logout', 'POST', null, stranger.token);

@@ -7,7 +7,7 @@ struct ContentView: View {
     @ObservedObject var lobby: Lobby
     @State private var showLobby = false
     @State private var showAccount = false
-    @StateObject private var account = Account()
+    @ObservedObject private var account = Account.shared
 
     @State private var query = ""
     @State private var importing = false

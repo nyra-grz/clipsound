@@ -192,12 +192,10 @@ private struct AccountHome: View {
 
                     VStack(alignment: .leading, spacing: 10) {
                         Label("Clan beitreten", systemImage: "person.badge.plus").font(.subheadline.weight(.semibold))
-                        TextField("Invite-Code", text: $joinCode).textFieldStyle(.roundedBorder)
+                        TextField("Invite-Code oder Link", text: $joinCode).textFieldStyle(.roundedBorder)
                         Button("Beitreten") {
                             Task {
-                                if let st = await account.joinClan(code: joinCode) {
-                                    note = st == "member" ? "Du bist jetzt im Clan." : "Anfrage gestellt – ein Admin muss dich freigeben."; joinCode = ""
-                                }
+                                if await account.joinClan(code: joinCode) != nil { note = "Du bist jetzt im Clan."; joinCode = "" }
                             }
                         }
                         .disabled(joinCode.trimmingCharacters(in: .whitespaces).count < 4 || account.busy)

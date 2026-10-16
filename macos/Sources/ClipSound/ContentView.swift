@@ -206,7 +206,7 @@ struct ContentView: View {
     @State private var pendingDelete: Sound?
     @State private var showLobby = false
     @State private var showAccount = false
-    @StateObject private var account = Account()
+    @ObservedObject private var account = Account.shared
 
     init(board: Board, updater: Updater) {
         self.board = board

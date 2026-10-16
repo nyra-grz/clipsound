@@ -62,10 +62,25 @@ public static class Relay
 
 /// <summary>
 /// Geräte-Verbindung, solange man angemeldet ist: meldet, welche Clan-Sounds in der eigenen Bibliothek
-/// liegen, und schickt einen davon, wenn ein anderes Clan-Mitglied ihn braucht.
+/// liegen, und schickt einen davon, wenn ein anderes Clan-Mitglied ihn braucht. Bekommt außerdem
+/// Live-Updates („im Clan hat sich etwas geändert“).
 /// </summary>
 public sealed class ClanShare
 {
+    /// <summary>Feste ID dieser Installation – damit ersetzt der Server eine verwaiste alte Verbindung</summary>
+    public static string DeviceId { get; } = LoadDeviceId();
+    private static string LoadDeviceId()
+    {
+        var file = Path.Combine(SoundLibrary.SupportFolder, "device.id");
+        try { if (File.Exists(file) && File.ReadAllText(file).Trim() is { Length: > 0 } id) return id; } catch { }
+        var fresh = Guid.NewGuid().ToString();
+        try { File.WriteAllText(file, fresh); } catch { }
+        return fresh;
+    }
+
+    /// <summary>Im Clan hat sich etwas geändert (kommt auf einem Hintergrund-Thread)</summary>
+    public event Action<string>? ClanChanged;
+
     private readonly Uri _server;
     private readonly object _lock = new();
     private string? _token;
@@ -101,6 +116,21 @@ public sealed class ClanShare
         }
     }
 
+    /// <summary>Sofort neu verbinden – z. B. nach dem Ruhezustand, wenn die alte Verbindung tot ist.</summary>
+    public void ReconnectNow()
+    {
+        string? token;
+        lock (_lock) token = _token;
+        if (token is null) return;
+        Stop();
+        lock (_lock) _token = token;
+        _retry = 0;
+        Connect();
+    }
+
+    /// <summary>Eigene Dateien sofort neu melden (z. B. gleich nach dem Teilen).</summary>
+    public void Refresh() => Rescan();
+
     /// <summary>Die eigenen Sound-Dateien haben sich geändert.</summary>
     public void FilesChanged(IEnumerable<string> paths)
     {
@@ -129,7 +159,7 @@ public sealed class ClanShare
             try
             {
                 await socket.ConnectAsync(b.Uri, cts.Token);
-                await SendAsync(socket, new { type = "auth", token }); // Token nicht in die Adresse, die landet in Protokollen
+                await SendAsync(socket, new { type = "auth", token, device = DeviceId }); // Token nicht in die Adresse, die landet in Protokollen
                 var buffer = new byte[64 * 1024];
                 while (socket.State == WebSocketState.Open)
                 {
@@ -159,7 +189,7 @@ public sealed class ClanShare
             if (socket != _socket) return;
             _socket = null;
             if (_token is null) return;
-            if (code == 4401) { _token = null; return; } // abgemeldet oder Konto gelöscht
+            if (code is 4401 or 4001) { _token = null; return; } // abgemeldet, Konto gelöscht oder durch eine neuere Verbindung ersetzt
         }
         // Netz weg o. Ä.: später neu verbinden
         var delay = TimeSpan.FromSeconds(Math.Min(30, Math.Pow(2, _retry++)));
@@ -192,6 +222,9 @@ public sealed class ClanShare
         {
             case "ready":
                 _retry = 0;
+                break;
+            case "clan":
+                if ((string?)msg["clanId"] is { } clanId) ClanChanged?.Invoke(clanId);
                 break;
             case "want":
             {

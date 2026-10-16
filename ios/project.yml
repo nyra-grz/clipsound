@@ -26,8 +26,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound
-        MARKETING_VERSION: "1.3"
-        CURRENT_PROJECT_VERSION: 3
+        MARKETING_VERSION: "1.4"
+        CURRENT_PROJECT_VERSION: 4
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         CODE_SIGN_STYLE: Automatic

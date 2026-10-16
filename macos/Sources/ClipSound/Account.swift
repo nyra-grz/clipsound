@@ -1,6 +1,9 @@
 import SwiftUI
 import Combine
 import Foundation
+#if canImport(AppKit)
+import AppKit
+#endif
 
 // Konto + Clans gegen den ClipSound-Server (cloud/clans.js). Solo-Modus läuft weiter ohne Konto
 // über Lobby.swift; hier geht es nur um angemeldete Nutzer und ihre Clans.
@@ -25,6 +28,10 @@ struct ClanSummary: Identifiable, Equatable, Hashable {
 
 @MainActor
 final class Account: ObservableObject {
+    /// Es gibt nur ein Konto pro App – sonst hätte jedes neu geöffnete Fenster eine eigene Geräte-Verbindung,
+    /// und die alten blieben als tote Verbindungen beim Server hängen.
+    static let shared = Account()
+
     static let server: URL = ProcessInfo.processInfo.environment["CLIPSOUND_SERVER"].flatMap(URL.init(string:))
         ?? URL(string: "https://rooms-production-8e28.up.railway.app")!
     /// Datenschutzerklärung (gilt für alle Versionen)
@@ -46,11 +53,42 @@ final class Account: ObservableObject {
 
     /// Gibt Clan-Sounds aus der eigenen Bibliothek an andere Mitglieder weiter, solange man angemeldet ist.
     let share = ClanShare(server: Account.server)
+    /// Live-Updates vom Server: in diesem Clan hat sich etwas geändert
+    let clanEvents = PassthroughSubject<String, Never>()
     private var librarySub: AnyCancellable?
+    private var refreshTask: Task<Void, Never>?
 
     init() {
         token = UserDefaults.standard.string(forKey: "accountToken")
+        share.onClanChanged = { [weak self] clanId in
+            Task { @MainActor in
+                self?.clanEvents.send(clanId)
+                self?.refreshSoon() // Clan-Liste (beigetreten, entfernt, aufgelöst)
+            }
+        }
         if let token { share.start(token: token); Task { await refreshMe() } }
+        #if canImport(AppKit)
+        // Nach dem Ruhezustand ist die alte Verbindung oft tot
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.appBecameActive() }
+        }
+        #endif
+    }
+
+    /// App ist wieder vorne (iPhone) oder aufgewacht (Mac): frisch verbinden und neu laden.
+    func appBecameActive() {
+        guard token != nil else { return }
+        share.reconnectNow()
+        refreshSoon()
+    }
+
+    private func refreshSoon() {
+        refreshTask?.cancel()
+        refreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.refreshMe()
+        }
     }
 
     /// Die eigene Bibliothek für Clans bereitstellen (die App ruft das einmal auf).
@@ -186,7 +224,7 @@ final class Account: ObservableObject {
         }
     }
 
-    /// Mit Invite-Code beitreten. Ergebnis: "member" (schon/direkt drin) oder "requested" (Anfrage gestellt).
+    /// Mit Invite-Code oder -Link beitreten – wie bei Discord ist man direkt drin. Ergebnis: "member".
     func joinClan(code: String) async -> String? {
         busy = true; problem = nil; defer { busy = false }
         switch await api("api/clans/join", method: "POST", body: ["code": code]) {
@@ -200,18 +238,27 @@ final class Account: ObservableObject {
 
 // MARK: - Clan-Modell (geteilt mit iOS)
 
-struct ClanMember: Identifiable, Equatable { let id: String; let name: String; let role: String }
-struct ClanRequest: Identifiable, Equatable { var id: String { userId }; let userId: String; let name: String; let email: String }
+struct ClanMember: Identifiable, Equatable {
+    let id: String; let name: String; let role: String
+    var owner = false
+    /// ClipSound ist bei ihm gerade offen
+    var online = false
+    var inSession = false
+    var isAdmin: Bool { role == "admin" }
+}
 struct ClanSound: Identifiable, Equatable {
     let id: String; let name: String; let size: Int
     /// Gerade ist jemand online, der ihn auf dem Gerät hat
     var available = true
+    /// Wer ihn geteilt hat
+    var by: String?
     var title: String {
         (name as NSString).deletingPathExtension.replacingOccurrences(of: "[-_]+", with: " ", options: .regularExpression)
     }
 }
 
-/// Eine geöffnete Clan-Seite: Mitglieder, Anfragen (Admin), Clan-Sounds, Session.
+/// Eine geöffnete Clan-Seite (wie ein Discord-Server): Session, Einladung, Clan-Sounds, Mitglieder.
+/// Lädt sich von selbst neu, wenn der Server meldet, dass sich etwas geändert hat.
 @MainActor
 final class ClanRoom: ObservableObject {
     let account: Account
@@ -225,21 +272,33 @@ final class ClanRoom: ObservableObject {
     @Published var inviteCode: String?
     @Published var sessionCode: String?
     @Published var members: [ClanMember] = []
-    @Published var requests: [ClanRequest] = []
     @Published var sounds: [ClanSound] = []
     @Published var busy = false
     @Published var note: String?
+    /// Nicht mehr im Clan (entfernt, ausgetreten, aufgelöst) – die Seite schließt sich
+    @Published var gone = false
 
     var isAdmin: Bool { role == "admin" }
+    var online: Int { members.filter(\.online).count }
+    /// Zum Weitergeben, öffnet eine Einladungsseite
+    var inviteLink: String? { inviteCode.map { Account.server.appendingPathComponent("c/\($0)").absoluteString } }
+
+    private var events: AnyCancellable?
 
     init(account: Account, lobby: Lobby, library: SoundLibrary, clanId: String, name: String) {
         self.account = account; self.lobby = lobby; self.library = library
         self.clanId = clanId; self.name = name
+        events = account.clanEvents
+            .filter { $0 == clanId }
+            .debounce(for: .milliseconds(250), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in Task { await self?.load(quiet: true) } }
     }
 
-    func load() async {
-        busy = true; defer { busy = false }
-        if case .success(let o) = await account.api("api/clans/\(clanId)") {
+    func load(quiet: Bool = false) async {
+        if !quiet { busy = true }
+        defer { if !quiet { busy = false } }
+        switch await account.api("api/clans/\(clanId)") {
+        case .success(let o):
             if let c = o["clan"] as? [String: Any] {
                 name = c["name"] as? String ?? name
                 role = c["role"] as? String ?? ""
@@ -249,30 +308,48 @@ final class ClanRoom: ObservableObject {
             }
             members = (o["members"] as? [[String: Any]])?.compactMap {
                 guard let id = $0["id"] as? String, let name = $0["name"] as? String, let role = $0["role"] as? String else { return nil }
-                return ClanMember(id: id, name: name, role: role)
-            } ?? []
-            requests = (o["requests"] as? [[String: Any]])?.compactMap {
-                guard let uid = $0["userId"] as? String, let name = $0["name"] as? String else { return nil }
-                return ClanRequest(userId: uid, name: name, email: $0["email"] as? String ?? "")
-            } ?? []
+                return ClanMember(id: id, name: name, role: role, owner: $0["owner"] as? Bool ?? false,
+                                  online: $0["online"] as? Bool ?? false, inSession: $0["inSession"] as? Bool ?? false)
+            }.sorted { a, b in a.online != b.online ? a.online : a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending } ?? []
+        case .failure(let e):
+            if e.message.contains("nicht in diesem Clan") || e.message.contains("gibt es nicht") { gone = true }
+            return
         }
         if case .success(let o) = await account.api("api/clans/\(clanId)/sounds") {
             sounds = (o["sounds"] as? [[String: Any]])?.compactMap {
                 guard let id = $0["id"] as? String, let name = $0["name"] as? String else { return nil }
-                return ClanSound(id: id, name: name, size: ($0["size"] as? Int) ?? 0, available: ($0["available"] as? Bool) ?? true)
+                return ClanSound(id: id, name: name, size: ($0["size"] as? Int) ?? 0,
+                                 available: ($0["available"] as? Bool) ?? true, by: $0["by"] as? String)
             } ?? []
         }
     }
 
-    func approve(_ userId: String, ok: Bool) async {
-        _ = await account.api("api/clans/\(clanId)/approve", method: "POST", body: ["userId": userId, "ok": ok])
-        await load()
+    func rotateInvite() async {
+        switch await account.api("api/clans/\(clanId)/invite", method: "POST") {
+        case .success(let o):
+            inviteCode = o["inviteCode"] as? String
+            note = "Neuer Code: \(inviteCode ?? "–"). Der alte gilt nicht mehr."
+        case .failure(let e): note = e.message
+        }
     }
 
-    func rotateInvite() async {
-        if case .success(let o) = await account.api("api/clans/\(clanId)/invite", method: "POST") {
-            inviteCode = o["inviteCode"] as? String
-            note = "Neuer Invite-Code: \(inviteCode ?? "–")"
+    /// Jemanden aus dem Clan entfernen (nur Admins, den Besitzer nicht).
+    func kick(_ m: ClanMember) async {
+        switch await account.api("api/clans/\(clanId)/kick", method: "POST", body: ["userId": m.id]) {
+        case .success: note = "\(m.name) ist nicht mehr im Clan."
+        case .failure(let e): note = e.message
+        }
+        await load(quiet: true)
+    }
+
+    /// Clan verlassen (alle außer dem Besitzer) bzw. auflösen (nur der Besitzer).
+    func leaveOrDissolve() async {
+        switch await account.api("api/clans/\(clanId)/\(owner ? "delete" : "leave")", method: "POST") {
+        case .success:
+            if lobby.active && lobby.code == sessionCode { lobby.leave() }
+            gone = true
+            await account.refreshMe()
+        case .failure(let e): note = e.message
         }
     }
 
@@ -304,6 +381,7 @@ final class ClanRoom: ObservableObject {
         case .failure(let e):
             note = e.message
         }
+        account.share.refresh() // gleich melden, dass sie hier liegen – sonst stehen sie kurz als „nicht verfügbar“ da
         await load()
     }
 
@@ -318,6 +396,9 @@ final class ClanRoom: ObservableObject {
 
     /// Clan-Sound in die eigenen (Solo-)Sounds übernehmen – kommt direkt vom Gerät eines Mitglieds.
     func takeToSolo(_ s: ClanSound) async {
+        let mine = library.sounds.map(\.url)
+        let have = await Task.detached(priority: .userInitiated) { mine.contains { FileHash.size(of: $0) == s.size && FileHash.sha256(of: $0) == s.id } }.value
+        if have { note = "„\(s.title)“ ist schon in deinen Sounds."; return }
         var req = URLRequest(url: Account.server.appendingPathComponent("api/clans/\(clanId)/blobs/\(s.id)"))
         if let t = account.token { req.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
         busy = true; defer { busy = false }

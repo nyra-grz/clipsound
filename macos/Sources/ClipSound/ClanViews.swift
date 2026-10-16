@@ -1,10 +1,14 @@
 import SwiftUI
 import AppKit
 
-/// Clan-Seite – übersichtlich in Karten statt Formular.
+/// Clan-Seite – wie ein Discord-Server: Session, Einladen, Clan-Sounds, Mitglieder (wer online ist).
+/// Aktualisiert sich von selbst, wenn sich im Clan etwas ändert.
 struct ClanPage: View {
     @StateObject private var room: ClanRoom
     @State private var pendingDelete: ClanSound?
+    @State private var pendingKick: ClanMember?
+    @State private var confirmLeave = false
+    @Environment(\.dismiss) private var dismiss
 
     init(account: Account, lobby: Lobby, library: SoundLibrary, clan: ClanSummary) {
         _room = StateObject(wrappedValue: ClanRoom(account: account, lobby: lobby, library: library, clanId: clan.id, name: clan.name))
@@ -20,7 +24,10 @@ struct ClanPage: View {
                         .foregroundStyle(room.isAdmin ? Color.orange : Color.secondary)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(room.name).font(.title2.weight(.bold))
-                        Badge(text: room.isAdmin ? "Admin" : "Mitglied", color: room.isAdmin ? .orange : .secondary)
+                        HStack(spacing: 8) {
+                            Badge(text: room.owner ? "Besitzer" : room.isAdmin ? "Admin" : "Mitglied", color: room.isAdmin ? .orange : .secondary)
+                            Text("\(room.online) von \(room.members.count) online").font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                     Spacer()
                 }
@@ -30,8 +37,7 @@ struct ClanPage: View {
                     Button {
                         Task { await room.startSession() }
                     } label: {
-                        Label(room.sessionCode == nil ? "Clan-Session starten" : "Session beitreten (\(room.sessionCode!))",
-                              systemImage: "play.circle.fill")
+                        Label(room.sessionCode == nil ? "Clan-Session starten" : "Session beitreten", systemImage: "play.circle.fill")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent).controlSize(.large)
@@ -39,31 +45,15 @@ struct ClanPage: View {
                     if room.lobby.active {
                         Button("Session verlassen", role: .destructive) { room.lobby.leave() }.controlSize(.small)
                     }
-                    Text("Alle im Clan können beitreten und zusammen abspielen. Ist niemand mehr drin, startet die nächste Session neu.")
+                    let inSession = room.members.filter(\.inSession).map(\.name)
+                    Text(inSession.isEmpty
+                         ? "Alle im Clan können beitreten und zusammen abspielen."
+                         : "Gerade in der Session: \(inSession.joined(separator: ", "))")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 .clanCard()
 
-                // Anfragen (Admin)
-                if room.isAdmin && !room.requests.isEmpty {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("Beitritts-Anfragen").font(.headline)
-                        ForEach(room.requests) { r in
-                            HStack(spacing: 10) {
-                                Avatar(name: r.name, size: 32)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(r.name).font(.subheadline.weight(.medium))
-                                    Text(r.email).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Button("Annehmen") { Task { await room.approve(r.userId, ok: true) } }
-                                    .buttonStyle(.borderedProminent).controlSize(.small)
-                                Button("Ablehnen") { Task { await room.approve(r.userId, ok: false) } }.controlSize(.small)
-                            }
-                        }
-                    }
-                    .clanCard()
-                }
+                InviteCard(room: room)
 
                 // Clan-Sounds
                 VStack(alignment: .leading, spacing: 10) {
@@ -77,10 +67,12 @@ struct ClanPage: View {
                     }
                     ForEach(room.sounds) { s in
                         HStack(spacing: 10) {
-                            Image(systemName: "waveform").foregroundStyle(.secondary)
-                            Text(s.title).foregroundStyle(s.available ? .primary : .secondary)
-                            if !s.available {
-                                Text("niemand online, der ihn hat").font(.caption).foregroundStyle(.tertiary)
+                            Image(systemName: "waveform").foregroundStyle(s.available ? Color.accentColor : .secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(s.title).foregroundStyle(s.available ? .primary : .secondary)
+                                Text(s.available ? (s.by.map { "von \($0)" } ?? "verfügbar")
+                                                 : "gerade niemand online, der ihn hat\(s.by.map { " · von \($0)" } ?? "")")
+                                    .font(.caption).foregroundStyle(.tertiary)
                             }
                             Spacer()
                             Button { Task { await room.takeToSolo(s) } } label: { Image(systemName: "square.and.arrow.down") }
@@ -103,8 +95,10 @@ struct ClanPage: View {
                 }
                 .clanCard()
 
-                MembersCard(room: room)
-                if room.isAdmin { AdminInviteCard(room: room) }
+                MembersCard(room: room, onKick: { pendingKick = $0 })
+
+                Button(room.owner ? "Clan auflösen …" : "Clan verlassen …", role: .destructive) { confirmLeave = true }
+                    .buttonStyle(.link).foregroundStyle(.red).font(.callout)
 
                 if room.busy { ProgressView().controlSize(.small) }
                 if let n = room.note { Text(n).font(.callout).foregroundStyle(.secondary) }
@@ -113,15 +107,27 @@ struct ClanPage: View {
         }
         .navigationTitle(room.name)
         .task { await room.load() }
-        .confirmationDialog("„\(pendingDelete?.title ?? "")“ aus dem Clan löschen?", isPresented: deleteShown, presenting: pendingDelete) { s in
+        .onChange(of: room.gone) { _, gone in if gone { dismiss() } }
+        .confirmationDialog("„\(pendingDelete?.title ?? "")“ aus dem Clan löschen?", isPresented: binding($pendingDelete), presenting: pendingDelete) { s in
             Button("Löschen", role: .destructive) { Task { await room.delete(s) } }
         } message: { _ in
             Text("Der Sound verschwindet für alle im Clan. Wer ihn schon in seine eigenen Sounds übernommen hat, behält ihn.")
         }
+        .confirmationDialog("\(pendingKick?.name ?? "") aus dem Clan entfernen?", isPresented: binding($pendingKick), presenting: pendingKick) { m in
+            Button("Entfernen", role: .destructive) { Task { await room.kick(m) } }
+        } message: { _ in
+            Text("Mit dem Invite-Code kommt die Person wieder rein. Erzeug danach einen neuen Code, wenn sie draußen bleiben soll.")
+        }
+        .confirmationDialog(room.owner ? "Clan „\(room.name)“ auflösen?" : "Clan „\(room.name)“ verlassen?", isPresented: $confirmLeave) {
+            Button(room.owner ? "Auflösen" : "Verlassen", role: .destructive) { Task { await room.leaveOrDissolve() } }
+        } message: {
+            Text(room.owner ? "Der Clan ist dann für alle weg, mit allen Clan-Sounds. Eigene Sounds bleiben auf den Geräten."
+                            : "Mit dem Invite-Code kannst du wieder beitreten.")
+        }
     }
 
-    private var deleteShown: Binding<Bool> {
-        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+    private func binding<T>(_ value: Binding<T?>) -> Binding<Bool> {
+        Binding(get: { value.wrappedValue != nil }, set: { if !$0 { value.wrappedValue = nil } })
     }
 
     private func pickSounds() -> [URL] {
@@ -136,52 +142,63 @@ struct ClanPage: View {
     }
 }
 
-/// Mitglieder – aufklappbar.
-private struct MembersCard: View {
+/// Einladen – wie bei Discord: wer den Code oder Link hat, ist sofort im Clan.
+private struct InviteCard: View {
     @ObservedObject var room: ClanRoom
-    @State private var show = false
+    @State private var copied = false
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Button { withAnimation { show.toggle() } } label: {
-                HStack {
-                    Text("Mitglieder (\(room.members.count))").font(.headline)
-                    Spacer()
-                    Image(systemName: show ? "chevron.up" : "chevron.down").foregroundStyle(.secondary)
+            Label("Freunde einladen", systemImage: "person.badge.plus").font(.headline)
+            HStack(spacing: 12) {
+                Text(room.inviteCode ?? "–").font(.title2.monospaced().weight(.semibold)).textSelection(.enabled)
+                Spacer()
+                Button(copied ? "Kopiert ✓" : "Link kopieren") {
+                    guard let link = room.inviteLink else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(link, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 }
+                .disabled(room.inviteLink == nil)
             }
-            .buttonStyle(.plain)
-            if show {
-                ForEach(room.members) { m in
-                    HStack(spacing: 10) {
-                        Avatar(name: m.name, size: 26)
-                        Text(m.name)
-                        Spacer()
-                        if m.role == "admin" { Badge(text: "Admin", color: .orange) }
-                    }
-                }
+            Text("Wer den Code oder Link hat, ist mit „Clan beitreten“ sofort drin.")
+                .font(.caption).foregroundStyle(.secondary)
+            if room.isAdmin {
+                Button("Neuen Code erzeugen (alter gilt dann nicht mehr)") { Task { await room.rotateInvite() } }
+                    .buttonStyle(.link).font(.caption)
             }
         }
         .clanCard()
     }
 }
 
-/// Invite-Code versteckt – 3× auf „Admin“ tippen (wie die System-Lautstärke).
-private struct AdminInviteCard: View {
+/// Mitglieder – wer online ist, wer in der Session ist; Admins können Leute entfernen.
+private struct MembersCard: View {
     @ObservedObject var room: ClanRoom
-    @State private var show = false
+    let onKick: (ClanMember) -> Void
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Admin").font(.headline)
-                .onTapGesture(count: 3) { withAnimation { show.toggle() } }
-            if show {
-                HStack {
-                    Text("Invite-Code").foregroundStyle(.secondary)
+            Text("Mitglieder (\(room.members.count))").font(.headline)
+            ForEach(room.members) { m in
+                HStack(spacing: 10) {
+                    ZStack(alignment: .bottomTrailing) {
+                        Avatar(name: m.name, size: 28)
+                        Circle().fill(m.online ? Color.green : Color.gray.opacity(0.6))
+                            .frame(width: 10, height: 10)
+                            .overlay(Circle().strokeBorder(Color(nsColor: .windowBackgroundColor), lineWidth: 2))
+                    }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(m.name).foregroundStyle(m.online ? .primary : .secondary)
+                        Text(m.inSession ? "in der Session" : m.online ? "online" : "offline").font(.caption).foregroundStyle(.tertiary)
+                    }
                     Spacer()
-                    Text(room.inviteCode ?? "–").font(.title3.monospaced()).textSelection(.enabled)
+                    if m.owner { Badge(text: "Besitzer", color: .orange) }
+                    else if m.isAdmin { Badge(text: "Admin", color: .orange) }
+                    if room.isAdmin && !m.owner && m.id != room.account.user?.id {
+                        Button { onKick(m) } label: { Image(systemName: "person.fill.xmark") }
+                            .buttonStyle(.borderless).foregroundStyle(.red).help("Aus dem Clan entfernen")
+                    }
                 }
-                Button("Neuen Code erzeugen") { Task { await room.rotateInvite() } }.controlSize(.small)
-            } else {
-                Text("3× auf „Admin“ tippen für den Invite-Code.").font(.caption).foregroundStyle(.tertiary)
             }
         }
         .clanCard()

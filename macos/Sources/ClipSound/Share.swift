@@ -46,9 +46,20 @@ enum Relay {
 }
 
 /// Geräte-Verbindung, solange man angemeldet ist: meldet, welche Clan-Sounds in der eigenen Bibliothek
-/// liegen, und schickt einen davon, wenn ein anderes Clan-Mitglied ihn braucht.
-/// Läuft auf dem Main-Thread (wie Lobby).
+/// liegen, und schickt einen davon, wenn ein anderes Clan-Mitglied ihn braucht. Bekommt außerdem
+/// Live-Updates („im Clan hat sich etwas geändert“). Läuft auf dem Main-Thread (wie Lobby).
 final class ClanShare {
+    /// Feste ID dieser App-Installation – damit ersetzt der Server eine verwaiste alte Verbindung
+    static let deviceID: String = {
+        if let id = UserDefaults.standard.string(forKey: "clipsoundDeviceID") { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: "clipsoundDeviceID")
+        return id
+    }()
+
+    /// Im Clan hat sich etwas geändert (Sounds, wer online ist, Mitglieder, Session)
+    var onClanChanged: ((String) -> Void)?
+
     private let server: URL
     private var token: String?
     private var socket: URLSessionWebSocketTask?
@@ -59,6 +70,20 @@ final class ClanShare {
     private var scanRun = 0
 
     init(server: URL) { self.server = server }
+
+    deinit { socket?.cancel(with: .goingAway, reason: nil) }
+
+    /// Sofort neu verbinden – nach dem Aufwachen oder wenn die App wieder vorne ist (die alte Verbindung ist dann oft tot)
+    func reconnectNow() {
+        guard token != nil else { return }
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        retry = 0
+        connect()
+    }
+
+    /// Eigene Dateien sofort neu melden (z. B. gleich nach dem Teilen)
+    func refresh() { rescan() }
 
     func start(token: String) {
         guard token != self.token || socket == nil else { return }
@@ -89,7 +114,7 @@ final class ClanShare {
         let task = URLSession.shared.webSocketTask(with: comps.url!)
         socket = task
         task.resume()
-        send(["type": "auth", "token": token]) // Token nicht in die Adresse, die landet in Protokollen
+        send(["type": "auth", "token": token, "device": Self.deviceID]) // Token nicht in die Adresse, die landet in Protokollen
         receive(on: task)
     }
 
@@ -114,7 +139,7 @@ final class ClanShare {
     private func closed(_ code: Int) {
         socket = nil
         guard token != nil else { return }
-        if code == 4401 { token = nil; return } // abgemeldet oder Konto gelöscht
+        if code == 4401 || code == 4001 { token = nil; return } // abgemeldet, Konto gelöscht oder durch eine neuere Verbindung ersetzt
         // Netz weg, App im Hintergrund o. Ä.: später neu verbinden
         let delay = min(30, pow(2, Double(retry)))
         retry += 1
@@ -140,6 +165,8 @@ final class ClanShare {
                 if let id = s["id"] as? String, let size = s["size"] as? Int { wanted[id] = size }
             }
             rescan()
+        case "clan":
+            if let id = msg["clanId"] as? String { onClanChanged?(id) }
         case "send":
             guard let rid = msg["rid"] as? String, let id = msg["id"] as? String else { return }
             guard let file = have[id] else { send(["type": "nosend", "rid": rid]); return }

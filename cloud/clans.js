@@ -1,7 +1,8 @@
 // ClipSound Accounts & Clans.
 // Baut auf demselben Postgres wie die Lobbys auf (additive Tabellen – bestehende Lobbys bleiben).
 // Accounts: E-Mail + Passwort, Bestätigung per 6-stelligem Code (Resend).
-// Clans: wie eine WhatsApp-Gruppe – Beitritt nur mit Invite-Code, der Admin gibt Anfragen frei.
+// Clans: wie ein Discord-Server – wer den Invite-Code (oder Link …/c/CODE) hat, ist sofort drin.
+// Admins können einen neuen Code erzeugen (der alte gilt dann nicht mehr) und Leute entfernen.
 // Clan-Sounds und Clan-Sessions stehen in server.js (sie brauchen die Geräte-Verbindungen).
 //
 // HTTP (alles JSON)
@@ -14,12 +15,14 @@
 //   GET  /api/account/me        (Bearer)                     → {user, clans}
 //   GET  /api/clans             (Bearer)                     → {clans:[{id,name,role,members}]}
 //   POST /api/clans             (Bearer) {name}              → {clan}               (Ersteller = Admin)
-//   GET  /api/clans/:id         (Mitglied)                   → {clan, members, requests?}
-//   POST /api/clans/:id/invite  (Admin)                      → {inviteCode}         (neuen Code erzeugen)
-//   POST /api/clans/join        (Bearer) {code}              → {status:'requested'|'member'}
-//   GET  /api/clans/:id/requests(Admin)                      → {requests:[{userId,name,email}]}
-//   POST /api/clans/:id/approve (Admin) {userId, ok}         → {ok}
+//   GET  /api/clans/:id         (Mitglied)                   → {clan:{…, inviteCode}, members:[{id,name,role,online,inSession}]}
+//   POST /api/clans/:id/invite  (Admin)                      → {inviteCode}         (neuen Code erzeugen, alter gilt nicht mehr)
+//   POST /api/clans/join        (Bearer) {code}              → {status:'member', clanId, clanName}   (code darf auch der Link sein)
+//   GET  /api/clans/invite/:code (ohne Konto)                → {clan:{name, members}}  (für die Einladungsseite)
+//   POST /api/clans/:id/kick    (Admin) {userId}             → {ok}                 (Besitzer kann niemand entfernen)
 //   POST /api/clans/:id/leave   (Mitglied)                   → {ok}
+//   POST /api/clans/:id/delete  (Besitzer)                   → {ok}                 (Clan auflösen)
+//   Alt (für ältere Apps): GET …/requests → {requests:[]}, POST …/approve → 404
 const crypto = require('crypto');
 
 const CODE_TTL = 15 * 60 * 1000;                  // Mail-Code gilt 15 Minuten
@@ -34,7 +37,8 @@ const normEmail = e => String(e || '').trim().toLowerCase().slice(0, 160);
 const okEmail = e => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 const cleanName = n => String(n || '').replace(/[^\p{L}\p{N} _\-.]/gu, '').trim().slice(0, 24);
 const cleanClan = n => String(n || '').replace(/[^\p{L}\p{N} _\-.!?']/gu, '').trim().slice(0, 32);
-const normInvite = c => String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+// Akzeptiert den Code oder einen Link wie https://…/c/ABCD2345
+const normInvite = c => String(c || '').trim().split(/[/?#=]/).filter(Boolean).pop()?.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8) || '';
 
 function hashPassword(pw) {
   const salt = crypto.randomBytes(16);
@@ -117,6 +121,9 @@ async function migrate(db) {
       PRIMARY KEY (clan_id, id)
     );
     ALTER TABLE clan_sounds ADD COLUMN IF NOT EXISTS added_by text;
+    -- Seit 2.7 gibt es keine Beitritts-Anfragen mehr: wer schon angefragt hatte, ist jetzt Mitglied
+    INSERT INTO clan_members (clan_id, user_id) SELECT clan_id, user_id FROM clan_requests ON CONFLICT DO NOTHING;
+    DELETE FROM clan_requests;
     CREATE TABLE IF NOT EXISTS clan_sessions (
       clan_id    text PRIMARY KEY REFERENCES clans(id) ON DELETE CASCADE,
       code       text NOT NULL,
@@ -180,12 +187,13 @@ async function memberRole(db, clanId, userId) {
 
 /**
  * true = Request wurde hier beantwortet. ctx: {db, readBody, json, hooks}
- * hooks (aus server.js): membershipChanged(userId), userGone(userId), clanGone(clanId)
+ * hooks (aus server.js): membershipChanged(userId), userGone(userId), clanGone(clanId), clanChanged(clanId),
+ *                        presence(clanId) → {online:Set<userId>, inSession:Set<userId>}
  */
 async function handle(req, res, ctx) {
   const { db, readBody, json } = ctx;
   const hooks = ctx.hooks || {};
-  const later = (fn, ...args) => { if (fn) Promise.resolve(fn(...args)).catch(e => console.error('Clan-Hook', e)); };
+  const later = (fn, ...args) => fn ? Promise.resolve(fn(...args)).catch(e => console.error('Clan-Hook', e)) : Promise.resolve();
   const url = new URL(req.url, 'http://x');
   const p = decodeURIComponent(url.pathname);
   if (!p.startsWith('/api/account') && !p.startsWith('/api/clans')) return false;
@@ -258,6 +266,16 @@ async function handle(req, res, ctx) {
       return json(res, 200, { token, user: { id: u.id, email: u.email, name: u.name } });
     }
 
+    // Einladung ansehen (ohne Konto, für die Seite …/c/CODE)
+    let im;
+    if ((im = /^\/api\/clans\/invite\/([^/]+)$/.exec(p)) && req.method === 'GET') {
+      const c = (await db.query(
+        'SELECT c.name, (SELECT count(*)::int FROM clan_members m WHERE m.clan_id = c.id) AS members FROM clans c WHERE c.invite_code = $1',
+        [normInvite(im[1])])).rows[0];
+      if (!c) return json(res, 404, { error: 'Diese Einladung gilt nicht (mehr)' });
+      return json(res, 200, { clan: c });
+    }
+
     // ab hier: eingeloggt
     const me = await user();
     if (p === '/api/account/me' && req.method === 'GET') {
@@ -313,10 +331,13 @@ async function handle(req, res, ctx) {
       if (!me) return json(res, 401, { error: 'Nicht eingeloggt' });
       const code = normInvite((await body()).code);
       const c = (await db.query('SELECT id, name FROM clans WHERE invite_code = $1', [code])).rows[0];
-      if (!c) return json(res, 404, { error: 'Diesen Invite-Code gibt es nicht' });
-      if (await role(c.id, me.id)) return json(res, 200, { status: 'member', clanId: c.id });
-      await db.query('INSERT INTO clan_requests (clan_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [c.id, me.id]);
-      return json(res, 200, { status: 'requested', clanId: c.id, clanName: c.name });
+      if (!c) return json(res, 404, { error: 'Diese Einladung gilt nicht (mehr)' });
+      if (!await role(c.id, me.id)) {
+        await db.query('INSERT INTO clan_members (clan_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [c.id, me.id]);
+        later(hooks.membershipChanged, me.id);
+        later(hooks.clanChanged, c.id);
+      }
+      return json(res, 200, { status: 'member', clanId: c.id, clanName: c.name });
     }
 
     let m;
@@ -330,17 +351,12 @@ async function handle(req, res, ctx) {
 
       if (!sub && req.method === 'GET') {
         if (!myRole) return json(res, 403, { error: 'Du bist nicht in diesem Clan' });
+        const presence = hooks.presence ? hooks.presence(clanId) : { online: new Set(), inSession: new Set() };
         const members = (await db.query(
           'SELECT u.id, u.name, m.role FROM clan_members m JOIN users u ON u.id = m.user_id WHERE m.clan_id = $1 ORDER BY m.role, u.name',
-          [clanId])).rows;
-        const out = { clan: { id: clan.id, name: clan.name, role: myRole, owner: clan.owner_id === me.id }, members };
+          [clanId])).rows.map(u => ({ ...u, owner: u.id === clan.owner_id, online: presence.online.has(u.id), inSession: presence.inSession.has(u.id) }));
+        const out = { clan: { id: clan.id, name: clan.name, role: myRole, owner: clan.owner_id === me.id, inviteCode: clan.invite_code }, members, requests: [] };
         out.clan.session = (await db.query('SELECT code FROM clan_sessions WHERE clan_id = $1', [clanId])).rows[0]?.code || null;
-        if (isAdmin) {
-          out.clan.inviteCode = clan.invite_code;
-          out.requests = (await db.query(
-            'SELECT u.id AS "userId", u.name, u.email FROM clan_requests r JOIN users u ON u.id = r.user_id WHERE r.clan_id = $1 ORDER BY r.created_at',
-            [clanId])).rows;
-        }
         return json(res, 200, out);
       }
 
@@ -354,36 +370,41 @@ async function handle(req, res, ctx) {
           invite = '';
         }
         if (!invite) return json(res, 503, { error: 'Kein Code frei' });
+        later(hooks.clanChanged, clanId);
         return json(res, 200, { inviteCode: invite });
       }
 
-      if (sub === '/requests' && req.method === 'GET') {
-        if (!isAdmin) return json(res, 403, { error: 'Nur Admins' });
-        const rows = (await db.query(
-          'SELECT u.id AS "userId", u.name, u.email FROM clan_requests r JOIN users u ON u.id = r.user_id WHERE r.clan_id = $1 ORDER BY r.created_at',
-          [clanId])).rows;
-        return json(res, 200, { requests: rows });
-      }
+      // Ältere Apps fragen noch nach Beitritts-Anfragen – die gibt es nicht mehr
+      if (sub === '/requests' && req.method === 'GET') return json(res, 200, { requests: [] });
+      if (sub === '/approve' && req.method === 'POST') return json(res, 404, { error: 'Beitritts-Anfragen gibt es nicht mehr – mit dem Invite-Code ist man direkt drin.' });
 
-      if (sub === '/approve' && req.method === 'POST') {
-        if (!isAdmin) return json(res, 403, { error: 'Nur Admins' });
-        const b = await body();
-        const userId = String(b.userId || '');
-        const pending = (await db.query('SELECT 1 FROM clan_requests WHERE clan_id = $1 AND user_id = $2', [clanId, userId])).rowCount;
-        if (!pending) return json(res, 404, { error: 'Keine Anfrage von dieser Person' });
-        await db.query('DELETE FROM clan_requests WHERE clan_id = $1 AND user_id = $2', [clanId, userId]);
-        if (b.ok === true) {
-          await db.query('INSERT INTO clan_members (clan_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [clanId, userId]);
-          later(hooks.membershipChanged, userId);
-        }
+      if (sub === '/kick' && req.method === 'POST') {
+        if (!isAdmin) return json(res, 403, { error: 'Nur Admins können Leute entfernen' });
+        const userId = String((await body()).userId || '');
+        if (userId === me.id) return json(res, 400, { error: 'Zum Gehen „Clan verlassen“ nehmen' });
+        if (userId === clan.owner_id) return json(res, 403, { error: 'Den Besitzer kann niemand entfernen' });
+        const r = await db.query('DELETE FROM clan_members WHERE clan_id = $1 AND user_id = $2', [clanId, userId]);
+        if (!r.rowCount) return json(res, 404, { error: 'Die Person ist nicht im Clan' });
+        later(hooks.membershipChanged, userId);
+        later(hooks.clanChanged, clanId);
         return json(res, 200, { ok: true });
       }
 
       if (sub === '/leave' && req.method === 'POST') {
         if (!myRole) return json(res, 200, { ok: true });
-        if (clan.owner_id === me.id) return json(res, 400, { error: 'Der Besitzer kann den Clan nicht verlassen (nur auflösen).' });
+        if (clan.owner_id === me.id) return json(res, 400, { error: 'Der Besitzer kann den Clan nicht verlassen, nur auflösen.' });
         await db.query('DELETE FROM clan_members WHERE clan_id = $1 AND user_id = $2', [clanId, me.id]);
         later(hooks.membershipChanged, me.id);
+        later(hooks.clanChanged, clanId);
+        return json(res, 200, { ok: true });
+      }
+
+      if (sub === '/delete' && req.method === 'POST') {
+        if (clan.owner_id !== me.id) return json(res, 403, { error: 'Nur der Besitzer kann den Clan auflösen' });
+        const people = (await db.query('SELECT user_id FROM clan_members WHERE clan_id = $1', [clanId])).rows.map(r => r.user_id);
+        await later(hooks.clanGone, clanId); // Session schließen, solange sie noch bekannt ist
+        await db.query('DELETE FROM clans WHERE id = $1', [clanId]); // Mitglieder, Sounds, Session hängen dran
+        for (const u of people) later(hooks.membershipChanged, u);
         return json(res, 200, { ok: true });
       }
     }

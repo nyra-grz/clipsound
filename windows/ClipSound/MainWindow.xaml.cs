@@ -140,6 +140,8 @@ public partial class MainWindow : Window
         ApplyIcon();
         // Herunterfahren/Abmelden: richtig beenden (Einstellungen speichern, Symbol weg) statt nur verstecken
         Application.Current.SessionEnding += (_, _) => { Quitting = true; Close(); };
+        // Nach dem Ruhezustand ist die Clan-Verbindung oft tot: gleich neu verbinden
+        SystemEvents.PowerModeChanged += (_, e) => { if (e.Mode == PowerModes.Resume) _account.Share.ReconnectNow(); };
 
         Render();
     }

@@ -31,7 +31,7 @@
 <main>
 <a class="back" href="/">← ClipSound</a>
 <h1>Datenschutzerklärung für ClipSound</h1>
-<p class="stand">Gilt für die Mac-, Windows- und iPhone-App und die Web-Version. Stand: 15. Oktober 2026</p>
+<p class="stand">Gilt für die Mac-, Windows-, Linux- und iPhone-App und die Web-Version. Stand: 16. Oktober 2026</p>
 
 <div class="kurz">
   <b>Kurz gesagt</b>
@@ -70,10 +70,11 @@
   <li>E-Mail-Adresse, Name und Passwort. Das Passwort wird nur als scrypt-Hash gespeichert, nie im Klartext.</li>
   <li>Ein Bestätigungscode für deine E-Mail-Adresse. Er gilt 15 Minuten.</li>
   <li>Die Anmelde-Schlüssel deiner Geräte, gespeichert nur als Hash. Beim Abmelden wird der Schlüssel gelöscht.</li>
-  <li>Deine Clans, deine Rolle (Admin oder Mitglied) und Beitrittsanfragen. Die Admins eines Clans sehen Name und E-Mail-Adresse von Personen, die beitreten wollen.</li>
+  <li>Deine Clans und deine Rolle (Besitzer, Admin oder Mitglied). In einen Clan kommt man mit dessen Invite-Code oder Einladungslink. Die anderen Mitglieder sehen deinen Namen und ob du gerade online oder in der Clan-Session bist. Deine E-Mail-Adresse sehen sie nicht.</li>
   <li>Die Liste der Clan-Sounds: Dateiname, Größe, Prüfsumme und wer den Sound geteilt hat.</li>
 </ul>
-<p>Solange du in der App angemeldet bist, hält sie eine Verbindung zum Server. Darüber meldet sie, welche Clan-Sounds auf deinem Gerät liegen, und schickt einen davon, wenn ein anderes Mitglied deines Clans ihn braucht. Die App sucht dafür nur in ihrem eigenen Sound-Ordner und nur nach Sounds, die schon in einem deiner Clans geteilt wurden. Gemeldet werden nur Prüfsummen.</p>
+<p>Wer eine Einladungsseite (…/c/CODE) öffnet, sieht den Namen des Clans und wie viele Mitglieder er hat.</p>
+<p>Solange du in der App angemeldet bist, hält sie eine Verbindung zum Server. Dafür bekommt jede Installation eine zufällige Geräte-ID, damit eine neue Verbindung eine alte ersetzt. Darüber meldet sie, welche Clan-Sounds auf deinem Gerät liegen, und schickt einen davon, wenn ein anderes Mitglied deines Clans ihn braucht. Die App sucht dafür nur in ihrem eigenen Sound-Ordner und nur nach Sounds, die schon in einem deiner Clans geteilt wurden. Gemeldet werden nur Prüfsummen.</p>
 
 <h3>Wie Sounds weitergegeben werden</h3>
 <p>Der Server speichert keine Audio-Dateien. Braucht jemand einen Sound, fragt der Server ein Gerät in der Lobby oder im Clan, auf dem er liegt. Dieses Gerät schickt die Datei an den Server. Der reicht sie im Arbeitsspeicher direkt an die Person weiter, die sie angefragt hat, und verwirft sie danach. Ist gerade niemand online, der den Sound hat, kann ihn niemand laden.</p>
@@ -85,7 +86,7 @@
 <p>Die Bestätigungscodes verschickt ClipSound über den Dienst Resend. Resend bekommt dafür deine E-Mail-Adresse und den Code. Andere E-Mails wie Newsletter oder Werbung gibt es nicht.</p>
 
 <h3>Updates</h3>
-<p>Die Mac- und die Windows-App fragen beim Start bei GitHub nach, ob es eine neue Version gibt, und laden Updates von dort. GitHub sieht dabei deine IP-Adresse. Dafür gilt die Datenschutzerklärung von GitHub.</p>
+<p>Die Mac-, Windows- und Linux-App fragen beim Start bei GitHub nach, ob es eine neue Version gibt, und laden Updates von dort. GitHub sieht dabei deine IP-Adresse. Dafür gilt die Datenschutzerklärung von GitHub.</p>
 
 <h3>Web-Version</h3>
 <p>Die Web-Version merkt sich in deinem Browser (localStorage) deinen Namen, die Lautstärke und die Einstellung „Überlappen“. Als Host merkt sie sich für die Dauer des Tabs, dass du der Host bist (sessionStorage). Diese Daten bleiben in deinem Browser.</p>
@@ -112,7 +113,7 @@
 </ul>
 
 <h2>Konto löschen</h2>
-<p>In der App unter „Konto &amp; Clans“ → „Konto löschen“, zur Sicherheit mit deinem Passwort. Gelöscht werden dann E-Mail-Adresse, Name, Passwort-Hash, Anmelde-Schlüssel, Mitgliedschaften und Beitrittsanfragen. Sounds, die du in einen Clan geteilt hast, bleiben in der Liste des Clans, aber ohne deinen Namen. Clans, die dir gehören, übernimmt ein anderes Mitglied, zuerst ein Admin. Bist du allein im Clan, wird er aufgelöst.</p>
+<p>In der App unter „Konto &amp; Clans“ → „Konto löschen“, zur Sicherheit mit deinem Passwort. Gelöscht werden dann E-Mail-Adresse, Name, Passwort-Hash, Anmelde-Schlüssel und Mitgliedschaften. Sounds, die du in einen Clan geteilt hast, bleiben in der Liste des Clans, aber ohne deinen Namen. Clans, die dir gehören, übernimmt ein anderes Mitglied, zuerst ein Admin. Bist du allein im Clan, wird er aufgelöst.</p>
 <p>Ohne App geht es per E-Mail an <a href="mailto:office@oezdek.com">office@oezdek.com</a>.</p>
 
 <h2>Deine Rechte</h2>

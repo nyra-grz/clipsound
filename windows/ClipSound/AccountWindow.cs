@@ -26,11 +26,15 @@ public sealed class AccountWindow : Window
         Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _root };
 
         _account.Changed += OnAccountChanged;
-        Closed += (_, _) => _account.Changed -= OnAccountChanged;
+        _account.Share.ClanChanged += OnClanChanged;
+        Closed += (_, _) => { _account.Changed -= OnAccountChanged; _account.Share.ClanChanged -= OnClanChanged; };
 
         Render();
         _ = _account.RefreshMeAsync(); // Clans frisch laden (z. B. inzwischen freigegeben)
     }
+
+    // Live-Update vom Server (beigetreten, entfernt, aufgelöst …): Clan-Liste neu laden
+    private void OnClanChanged(string clanId) => Dispatcher.BeginInvoke(() => _ = _account.RefreshMeAsync());
 
     private void OnAccountChanged() => Dispatcher.BeginInvoke(() =>
     {
@@ -169,14 +173,14 @@ public sealed class AccountWindow : Window
             else note.Text = _account.Problem ?? "Fehlgeschlagen.";
         }));
 
-        _root.Children.Add(Caption("Clan beitreten (Invite-Code)"));
+        _root.Children.Add(Caption("Clan beitreten (Invite-Code oder Link)"));
         var joinBox = new TextBox();
         _root.Children.Add(joinBox);
         _root.Children.Add(Btn("Beitreten", async (_, _) =>
         {
             if (joinBox.Text.Trim().Length < 4) return;
             var st = await _account.JoinClanAsync(joinBox.Text.Trim());
-            note.Text = st switch { "member" => "Du bist jetzt im Clan.", "requested" => "Anfrage gestellt – ein Admin muss dich freigeben.", _ => _account.Problem ?? "Fehlgeschlagen." };
+            note.Text = st is not null ? "Du bist jetzt im Clan." : _account.Problem ?? "Fehlgeschlagen.";
             if (st is not null) joinBox.Text = "";
         }));
         _root.Children.Add(note);
@@ -236,93 +240,111 @@ public sealed class AccountWindow : Window
     }
 }
 
-/// <summary>Eine Clan-Seite: Session, Anfragen (Admin), Clan-Sounds, versteckter Invite-Code.</summary>
+/// <summary>Eine Clan-Seite wie ein Discord-Server: Session, Einladen, Clan-Sounds, Mitglieder (wer online ist).
+/// Lädt sich von selbst neu, wenn der Server meldet, dass sich im Clan etwas geändert hat.</summary>
 public sealed class ClanWindow : Window
 {
     private readonly ClanRoom _room;
     private readonly StackPanel _root = new() { Margin = new Thickness(18) };
-    private int _adminTaps;
+    private readonly System.Windows.Threading.DispatcherTimer _reload;
 
     public ClanWindow(ClanRoom room)
     {
         _room = room;
         Title = room.Name;
-        Width = 480; Height = 680;
+        Width = 500; Height = 720;
         WindowStartupLocation = WindowStartupLocation.CenterOwner;
         Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = _root };
+        _reload = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _reload.Tick += (_, _) => { _reload.Stop(); _ = _room.LoadAsync(); };
         _room.Changed += OnChanged;
-        Closed += (_, _) => _room.Changed -= OnChanged;
+        _room.Account.Share.ClanChanged += OnClanChanged;
+        Closed += (_, _) => { _room.Changed -= OnChanged; _room.Account.Share.ClanChanged -= OnClanChanged; _reload.Stop(); };
         _ = _room.LoadAsync();
         Render();
     }
 
-    private void OnChanged() => Dispatcher.Invoke(Render);
-
-    private static TextBlock Head(string t) => new() { Text = t, FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 10) };
-    private static TextBlock Muted(string t) => new() { Text = t, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 6, 0, 0) };
-    private static Button Btn(string t, RoutedEventHandler h)
+    private void OnChanged() => Dispatcher.BeginInvoke(() => { if (_room.Gone) Close(); else Render(); });
+    private void OnClanChanged(string clanId)
     {
-        var b = new Button { Content = t, Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 10, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        if (clanId != _room.ClanId) return;
+        Dispatcher.BeginInvoke(() => { _reload.Stop(); _reload.Start(); }); // mehrere Meldungen zusammenfassen
+    }
+
+    private static TextBlock Head(string t) => new() { Text = t, FontSize = 20, FontWeight = FontWeights.SemiBold };
+    private static TextBlock Section(string t) => new() { Text = t, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 18, 0, 6) };
+    private static TextBlock Muted(string t) => new() { Text = t, Foreground = Brushes.Gray, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+    private static Button Btn(string t, RoutedEventHandler h, bool accent = false)
+    {
+        var b = new Button { Content = t, Padding = new Thickness(12, 5, 12, 5), Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Left };
+        if (accent) b.SetResourceReference(StyleProperty, "AccentButtonStyle");
         b.Click += h; return b;
     }
+    private static Button Small(string t, RoutedEventHandler h, string? tip = null)
+    {
+        var b = new Button { Content = t, Margin = new Thickness(6, 0, 0, 0), Padding = new Thickness(8, 2, 8, 2), ToolTip = tip };
+        b.Click += h; return b;
+    }
+
+    private bool Ask(string text, string title) =>
+        MessageBox.Show(this, text, title, MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes;
 
     private void Render()
     {
         _root.Children.Clear();
+        Title = _room.Name;
         _root.Children.Add(Head(_room.Name));
-        _root.Children.Add(Muted(_room.IsAdmin ? "Rolle: Admin" : "Rolle: Mitglied"));
+        _root.Children.Add(Muted($"{(_room.Owner ? "Besitzer" : _room.IsAdmin ? "Admin" : "Mitglied")} · {_room.OnlineCount} von {_room.Members.Count} online"));
 
-        _root.Children.Add(Btn(_room.SessionCode is null ? "Clan-Session starten" : $"Session beitreten ({_room.SessionCode})",
-            async (_, _) => await _room.StartSessionAsync()));
-        _root.Children.Add(Muted("Alle im Clan können der Session beitreten und gemeinsam abspielen. Ist niemand mehr drin, startet die nächste Session neu."));
+        // Session
+        _root.Children.Add(Btn(_room.SessionCode is null ? "Clan-Session starten" : "Session beitreten",
+            async (_, _) => await _room.StartSessionAsync(), accent: true));
+        var inSession = _room.Members.Where(m => m.InSession).Select(m => m.Name).ToList();
+        _root.Children.Add(Muted(inSession.Count == 0 ? "Alle im Clan können beitreten und gemeinsam abspielen."
+                                                      : "Gerade in der Session: " + string.Join(", ", inSession)));
 
-        // Beitritts-Anfragen (nur Admin)
-        if (_room.IsAdmin && _room.Requests.Count > 0)
+        // Einladen (wie Discord: mit Code oder Link sofort drin)
+        _root.Children.Add(Section("Freunde einladen"));
+        var inviteRow = new DockPanel();
+        var copy = Small("Link kopieren", (_, _) =>
         {
-            _root.Children.Add(new TextBlock { Text = "Beitritts-Anfragen", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 16, 0, 4) });
-            foreach (var r in _room.Requests)
-            {
-                var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
-                var ok = new Button { Content = "Annehmen", Margin = new Thickness(6, 0, 0, 0) };
-                var no = new Button { Content = "Ablehnen", Margin = new Thickness(6, 0, 0, 0) };
-                var req = r;
-                ok.Click += async (_, _) => await _room.ApproveAsync(req.UserId, true);
-                no.Click += async (_, _) => await _room.ApproveAsync(req.UserId, false);
-                DockPanel.SetDock(ok, Dock.Right); DockPanel.SetDock(no, Dock.Right);
-                row.Children.Add(no); row.Children.Add(ok);
-                row.Children.Add(new TextBlock { Text = $"{r.Name}  ({r.Email})", VerticalAlignment = VerticalAlignment.Center });
-                _root.Children.Add(row);
-            }
-        }
+            if (_room.InviteLink is { } link) { try { Clipboard.SetText(link); _room.Note = "Link kopiert: " + link; Render(); } catch { } }
+        });
+        DockPanel.SetDock(copy, Dock.Right); inviteRow.Children.Add(copy);
+        inviteRow.Children.Add(new TextBox { Text = _room.InviteCode ?? "–", IsReadOnly = true, FontSize = 18, FontFamily = new FontFamily("Cascadia Mono, Consolas"), BorderThickness = new Thickness(0) });
+        _root.Children.Add(inviteRow);
+        _root.Children.Add(Muted("Wer den Code oder Link hat, ist mit „Clan beitreten“ sofort drin."));
+        if (_room.IsAdmin)
+            _root.Children.Add(Btn("Neuen Code erzeugen (alter gilt dann nicht mehr)", async (_, _) => await _room.RotateInviteAsync()));
 
         // Clan-Sounds
-        _root.Children.Add(new TextBlock { Text = $"Clan-Sounds ({_room.Sounds.Count})", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 16, 0, 4) });
+        _root.Children.Add(Section($"Clan-Sounds ({_room.Sounds.Count})"));
         if (_room.Sounds.Count == 0) _root.Children.Add(Muted("Noch keine Sounds im Clan. Teile welche aus deiner Bibliothek."));
         foreach (var s in _room.Sounds)
         {
-            var row = new DockPanel { Margin = new Thickness(0, 2, 0, 2) };
+            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
             var snd = s;
             if (_room.IsAdmin)
             {
-                var del = new Button { Content = "Löschen", Margin = new Thickness(6, 0, 0, 0), ToolTip = "Aus dem Clan löschen (nur Admins)" };
-                del.Click += async (_, _) =>
+                var del = Small("Löschen", async (_, _) =>
                 {
-                    if (MessageBox.Show(this, $"„{snd.Title}“ aus dem Clan löschen? Er verschwindet für alle im Clan.", "Clan-Sound löschen",
-                            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) == MessageBoxResult.Yes)
-                        await _room.DeleteSoundAsync(snd);
-                };
+                    if (Ask($"„{snd.Title}“ aus dem Clan löschen? Er verschwindet für alle im Clan.", "Clan-Sound löschen")) await _room.DeleteSoundAsync(snd);
+                }, "Aus dem Clan löschen (nur Admins)");
                 DockPanel.SetDock(del, Dock.Right); row.Children.Add(del);
             }
-            var take = new Button { Content = "In meine Sounds", Margin = new Thickness(6, 0, 0, 0), IsEnabled = s.Available };
-            take.Click += async (_, _) => await _room.TakeToSoloAsync(snd);
+            var take = Small("In meine Sounds", async (_, _) => await _room.TakeToSoloAsync(snd));
+            take.IsEnabled = s.Available;
             DockPanel.SetDock(take, Dock.Right); row.Children.Add(take);
-            var title = new TextBlock
-            {
-                Text = s.Available ? s.Title : $"{s.Title}  (niemand online, der ihn hat)",
-                VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis,
-            };
+            var text = new StackPanel();
+            var title = new TextBlock { Text = s.Title, TextTrimming = TextTrimming.CharacterEllipsis };
             if (!s.Available) title.Foreground = Brushes.Gray;
-            row.Children.Add(title);
+            text.Children.Add(title);
+            text.Children.Add(new TextBlock
+            {
+                Text = s.Available ? (s.By is { } by ? $"von {by}" : "verfügbar") : "gerade niemand online, der ihn hat" + (s.By is { } b2 ? $" · von {b2}" : ""),
+                Foreground = Brushes.Gray, FontSize = 11,
+            });
+            row.Children.Add(text);
             _root.Children.Add(row);
         }
         _root.Children.Add(Btn("Sounds im Clan teilen…", (_, _) =>
@@ -332,33 +354,51 @@ public sealed class ClanWindow : Window
                 Multiselect = true, InitialDirectory = _room.LibraryFolder,
                 Filter = "Audio|*.mp3;*.wav;*.m4a;*.aac;*.ogg;*.opus;*.flac;*.aif;*.aiff;*.caf;*.webm|Alle Dateien|*.*",
             };
-            if (dlg.ShowDialog() == true)
-                _ = _room.ShareAsync(dlg.FileNames);
+            if (dlg.ShowDialog() == true) _ = _room.ShareAsync(dlg.FileNames);
         }));
         _root.Children.Add(Muted("Die Sounds bleiben auf euren Geräten und gehen direkt von einem zum anderen. Der Server speichert keine Dateien."));
 
-        // Admin: Invite-Code versteckt (3× auf „Admin“ klicken)
-        if (_room.IsAdmin)
+        // Mitglieder
+        _root.Children.Add(Section($"Mitglieder ({_room.Members.Count})"));
+        foreach (var m in _room.Members)
         {
-            var adminHead = new TextBlock { Text = "Admin", FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 18, 0, 4), Cursor = Cursors.Hand };
-            adminHead.MouseLeftButtonDown += (_, e) =>
+            var row = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
+            var who = m;
+            if (_room.IsAdmin && !m.Owner && m.Id != _room.MyId)
             {
-                _adminTaps += 1;
-                if (e.ClickCount >= 3 || _adminTaps >= 3) { _adminTaps = 0; ShowInvite(); }
-            };
-            _root.Children.Add(adminHead);
-            _root.Children.Add(new TextBlock { Text = "3× auf „Admin“ klicken für den Invite-Code.", Foreground = Brushes.Gray, FontSize = 11 });
+                var kick = Small("Entfernen", async (_, _) =>
+                {
+                    if (Ask($"{who.Name} aus dem Clan entfernen?\n\nMit dem Invite-Code kommt die Person wieder rein – erzeug danach einen neuen Code, wenn sie draußen bleiben soll.", "Entfernen"))
+                        await _room.KickAsync(who);
+                });
+                DockPanel.SetDock(kick, Dock.Right); row.Children.Add(kick);
+            }
+            if (m.Owner || m.IsAdmin)
+            {
+                var badge = new TextBlock { Text = m.Owner ? "Besitzer" : "Admin", Foreground = Brushes.DarkOrange, Margin = new Thickness(6, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center };
+                DockPanel.SetDock(badge, Dock.Right); row.Children.Add(badge);
+            }
+            var dot = new TextBlock { Text = "●", Foreground = m.Online ? Brushes.LimeGreen : Brushes.Gray, Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
+            DockPanel.SetDock(dot, Dock.Left); row.Children.Add(dot);
+            var name = new StackPanel();
+            var nameText = new TextBlock { Text = m.Name };
+            if (!m.Online) nameText.Foreground = Brushes.Gray;
+            name.Children.Add(nameText);
+            name.Children.Add(new TextBlock { Text = m.InSession ? "in der Session" : m.Online ? "online" : "offline", Foreground = Brushes.Gray, FontSize = 11 });
+            row.Children.Add(name);
+            _root.Children.Add(row);
         }
 
-        if (_room.Note is { } note) _root.Children.Add(Muted(note));
-    }
+        var leave = Btn(_room.Owner ? "Clan auflösen …" : "Clan verlassen …", async (_, _) =>
+        {
+            var q = _room.Owner ? $"Clan „{_room.Name}“ auflösen? Er ist dann für alle weg, mit allen Clan-Sounds."
+                                : $"Clan „{_room.Name}“ verlassen? Mit dem Invite-Code kannst du wieder beitreten.";
+            if (Ask(q, _room.Owner ? "Clan auflösen" : "Clan verlassen")) await _room.LeaveOrDissolveAsync();
+        });
+        leave.Foreground = Brushes.OrangeRed;
+        leave.Margin = new Thickness(0, 20, 0, 0);
+        _root.Children.Add(leave);
 
-    private void ShowInvite()
-    {
-        var box = new StackPanel { Margin = new Thickness(0, 6, 0, 0) };
-        box.Children.Add(new TextBlock { Text = "Invite-Code", Foreground = Brushes.Gray, FontSize = 12 });
-        box.Children.Add(new TextBox { Text = _room.InviteCode ?? "–", IsReadOnly = true, FontSize = 16 });
-        box.Children.Add(Btn("Neuen Code erzeugen", async (_, _) => await _room.RotateInviteAsync()));
-        _root.Children.Add(box);
+        if (_room.Note is { } note) _root.Children.Add(Muted(note));
     }
 }

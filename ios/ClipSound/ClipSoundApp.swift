@@ -21,8 +21,8 @@ struct ClipSoundApp: App {
                 .onReceive(library.$sounds) { lobby.hostLibraryChanged($0) }
         }
         .onChange(of: scenePhase) { _, phase in
-            // Dateien könnten über die Dateien-App dazugekommen sein
-            if phase == .active { library.reload() }
+            // Dateien könnten über die Dateien-App dazugekommen sein; die Clan-Verbindung ist nach dem Hintergrund oft tot
+            if phase == .active { library.reload(); Account.shared.appBecameActive() }
         }
     }
 

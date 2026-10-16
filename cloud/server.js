@@ -35,8 +35,10 @@
 //   In einer Clan-Session gibt es keinen Host; man kommt nur mit dem Ticket aus POST …/session hinein.
 //
 // WebSocket  wss://…/ws?share=1   Geräte-Verbindung, solange man in der App angemeldet ist
-//   Client → auth {token} (als Erstes), have {ids}, nosend {rid}, ping {t}
-//   Server → ready {}, want {sounds:[{id,size}]} (Clan-Sounds, nach denen das Gerät schauen soll), send {rid, id}, pong
+//   Client → auth {token, device?} (als Erstes; device = feste ID dieser App-Installation), have {ids}, nosend {rid}, ping {t}
+//   Server → ready {}, want {sounds:[{id,size}]} (Clan-Sounds, nach denen das Gerät schauen soll), send {rid, id}, pong,
+//            clan {clanId}   (im Clan hat sich etwas geändert: Sounds, wer online ist, Mitglieder, Session – neu laden)
+//   Close 4001 = durch eine neue Verbindung desselben Geräts ersetzt (nicht neu verbinden)
 //
 //   Close-Codes: 4404 Lobby gibt's nicht, 4401 kein Zugang, 4409 voll, 4410 geschlossen, 4429 zu viele Versuche
 const http = require('http');
@@ -58,7 +60,7 @@ const HOST_GRACE = 60 * 1000;        // so lange wartet eine Lobby, wenn der Hos
 const SEND_START = 8000;             // so lange hat ein Gerät, um mit dem Schicken anzufangen
 const SEND_TIME = 45000;             // … und so lange, um fertig zu werden
 const MAX_RELAYS = 24;               // gleichzeitige Durchleitungen (jede hält höchstens MAX_FILE im Arbeitsspeicher)
-const MAX_DEVICES = 5;               // Geräte-Verbindungen pro Konto
+const MAX_DEVICES = 8;               // Geräte-Verbindungen pro Konto
 
 const AUDIO_TYPES = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.opus': 'audio/ogg',
@@ -227,7 +229,12 @@ function askDevice(ws, id) {
       ws.sending--;
       err ? reject(err) : resolve(buf);
     };
-    r.timer = setTimeout(() => r.done(new Error('keine Antwort')), SEND_START);
+    r.timer = setTimeout(() => {
+      r.done(new Error('keine Antwort'));
+      // Gerät reagiert nicht (eingefroren, im Hintergrund, verwaiste Verbindung): Verbindung kappen,
+      // damit es nicht wieder gefragt wird. Lebt die App noch, verbindet sie sich neu und meldet sich frisch.
+      try { ws.terminate(); } catch {}
+    }, SEND_START);
     relays.set(rid, r);
     ws.sending++;
     sendTo(ws, { type: 'send', rid, id });
@@ -326,7 +333,9 @@ async function closeLobby(code, reason) {
   await db.query('DELETE FROM lobbies WHERE code = $1', [code]);
   await db.query('DELETE FROM clan_sessions WHERE code = $1', [code]); // falls das eine Clan-Session war
   hostAway.delete(code);
+  const clanId = sessionClan.get(code);
   sessionClan.delete(code);
+  if (clanId) notifyClan(clanId);
   lastSounds.delete(code);
   const set = lobbies.get(code);
   if (set) {
@@ -410,6 +419,25 @@ async function syncSessionSounds(code, clanId) {
   soundsChanged(code);
 }
 
+/** Allen Geräten der Mitglieder sagen, dass sie die Clan-Seite neu laden sollen (gesammelt, höchstens alle 400 ms). */
+const clanTimers = new Map();
+function notifyClan(clanId) {
+  if (clanTimers.has(clanId)) return;
+  clanTimers.set(clanId, setTimeout(() => {
+    clanTimers.delete(clanId);
+    for (const set of devices.values()) for (const ws of set) if (ws.clans.has(clanId)) sendTo(ws, { type: 'clan', clanId });
+  }, 400));
+}
+
+/** Wer im Clan gerade online ist (Geräte-Verbindung) und wer in der Session ist. */
+function presence(clanId) {
+  const online = new Set(), inSession = new Set();
+  for (const [userId, set] of devices) for (const ws of set) if (ws.clans.has(clanId)) online.add(userId);
+  const code = sessionOf(clanId);
+  if (code) for (const ws of lobbies.get(code) || []) if (ws.userId) { inSession.add(ws.userId); online.add(ws.userId); }
+  return { online, inSession };
+}
+
 /** Welche Clan-Sounds ein Gerät suchen soll (alle aus allen Clans des Nutzers). */
 async function sendWant(ws) {
   const { rows } = await db.query(
@@ -422,9 +450,10 @@ async function clanSoundsChanged(clanId) {
   for (const set of devices.values()) for (const ws of set) if (ws.clans.has(clanId)) await sendWant(ws);
   const code = sessionOf(clanId);
   if (code) await syncSessionSounds(code, clanId);
+  notifyClan(clanId);
 }
 
-/** Clans eines Nutzers haben sich geändert (beigetreten, ausgetreten, angelegt). */
+/** Clans eines Nutzers haben sich geändert (beigetreten, ausgetreten, entfernt, angelegt, aufgelöst). */
 async function membershipChanged(userId) {
   const now = new Set((await db.query('SELECT clan_id FROM clan_members WHERE user_id = $1', [userId])).rows.map(r => r.clan_id));
   const touched = new Set(now);
@@ -433,12 +462,16 @@ async function membershipChanged(userId) {
     ws.clans = new Set(now);
     await sendWant(ws);
   }
+  // wer nicht mehr im Clan ist, fliegt aus der Clan-Session (auch ohne Geräte-Verbindung)
+  for (const [code, clanId] of sessionClan) {
+    if (now.has(clanId)) continue;
+    for (const ws of lobbies.get(code) || []) if (ws.userId === userId) { ws.close(4410, 'Nicht mehr im Clan'); touched.add(clanId); }
+  }
   for (const clanId of touched) {
+    notifyClan(clanId);
+    for (const ws of devices.get(userId) || []) sendTo(ws, { type: 'clan', clanId }); // auch wer gerade rausgeflogen ist
     const code = sessionOf(clanId);
-    if (!code) continue;
-    // wer nicht mehr im Clan ist, fliegt aus der Clan-Session
-    if (!now.has(clanId)) for (const ws of lobbies.get(code) || []) if (ws.userId === userId) ws.close(4410, 'Nicht mehr im Clan');
-    soundsChanged(code);
+    if (code) soundsChanged(code);
   }
 }
 
@@ -465,7 +498,8 @@ async function clanMedia(req, res, p) {
   if (!role) { json(res, 403, { error: 'Du bist nicht in diesem Clan' }); return true; }
 
   if (tail === 'sounds' && req.method === 'GET') {
-    const { rows } = await db.query('SELECT id, name, size FROM clan_sounds WHERE clan_id = $1 ORDER BY pos', [clanId]);
+    const { rows } = await db.query(
+      'SELECT s.id, s.name, s.size, u.name AS "by" FROM clan_sounds s LEFT JOIN users u ON u.id = s.added_by WHERE s.clan_id = $1 ORDER BY s.pos', [clanId]);
     json(res, 200, { sounds: rows.map(s => ({ ...s, available: clanDevices(clanId, s.id).length > 0 })) });
     return true;
   }
@@ -530,6 +564,7 @@ async function clanMedia(req, res, p) {
       sessionClan.set(code, clanId);
       hostAway.set(code, Date.now()); // bis jemand reinkommt
       await syncSessionSounds(code, clanId);
+      notifyClan(clanId);
     }
     json(res, 200, { code, ticket: ticketFor(code, me.id) });
     return true;
@@ -597,11 +632,14 @@ async function route(req, res) {
 
   if (p.startsWith('/api/account') || p.startsWith('/api/clans')) {
     if (await clanMedia(req, res, p)) return; // Clan-Sounds/Session (brauchen die Geräte-Verbindungen)
-    await clans.handle(req, res, { db, readBody, json, hooks: { membershipChanged, userGone, clanGone } });
+    await clans.handle(req, res, { db, readBody, json, hooks: { membershipChanged, userGone, clanGone, clanChanged: notifyClan, presence } });
     return;
   }
 
-  const rel = p === '/' || /^\/l\/[A-Za-z0-9]+$/.test(p) ? 'index.html' : p === '/datenschutz' ? 'datenschutz.html' : path.basename(p);
+  const rel = p === '/' || /^\/l\/[A-Za-z0-9]+$/.test(p) ? 'index.html'
+    : p === '/datenschutz' ? 'datenschutz.html'
+    : /^\/c\/[A-Za-z0-9-]+$/.test(p) ? 'einladung.html'
+    : path.basename(p);
   const type = STATIC_TYPES[path.extname(rel)];
   if (!type) return json(res, 404, { error: 'Nicht gefunden' });
   serveFile(req, res, path.join(PUBLIC_DIR, rel), type, { 'Cache-Control': 'no-cache' });
@@ -642,7 +680,13 @@ function soundsChanged(code) {
   }, 250));
 }
 // Eine Clan-Geräte-Verbindung hat sich geändert: laufende Sessions ihrer Clans angleichen
-const deviceChanged = ws => { for (const clanId of ws.clans) { const code = sessionOf(clanId); if (code) soundsChanged(code); } };
+const deviceChanged = ws => {
+  for (const clanId of ws.clans) {
+    notifyClan(clanId); // wer online ist / welche Sounds verfügbar sind
+    const code = sessionOf(clanId);
+    if (code) soundsChanged(code);
+  }
+};
 
 /** Nachrichten, die Lobby- und Geräte-Verbindungen gleich behandeln. true = erledigt. */
 function deviceMessage(ws, msg, onHaveChanged) {
@@ -736,7 +780,11 @@ async function deviceConnection(ws) {
   ws.clans = new Set((await db.query('SELECT clan_id FROM clan_members WHERE user_id = $1', [user.id])).rows.map(r => r.clan_id));
   if (!live(ws)) return;
   const set = devices.get(user.id) || devices.set(user.id, new Set()).get(user.id);
-  if (set.size >= MAX_DEVICES) [...set][0].close(4000, 'Zu viele Geräte'); // das älteste fliegt raus
+  // Dieselbe App-Installation verbindet sich neu (z. B. Fenster wieder geöffnet): die alte Verbindung ist verwaist
+  ws.device = typeof first.device === 'string' ? first.device.slice(0, 64) : '';
+  if (ws.device) for (const old of set) if (old.device === ws.device) old.close(4001, 'Ersetzt');
+  // Zu viele: die älteste geht – mit 4401, damit auch ältere Apps nicht sofort wieder verbinden
+  if (set.size >= MAX_DEVICES) [...set][0].close(4401, 'Zu viele Verbindungen');
   set.add(ws);
   ws.on('close', () => {
     set.delete(ws);
@@ -750,6 +798,7 @@ async function deviceConnection(ws) {
   });
   sendTo(ws, { type: 'ready' });
   await sendWant(ws);
+  deviceChanged(ws); // ist jetzt online
 }
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 192 * 1024 });
@@ -802,9 +851,11 @@ wss.on('connection', async (ws, req) => {
   if (ws.isHost) for (const old of set) if (old.isHost) old.close(4000, 'Host hat sich neu verbunden');
   if (keepsOpen(ws)) hostAway.delete(code);
   set.add(ws);
+  if (sessionClan.has(code)) notifyClan(sessionClan.get(code)); // ist jetzt in der Session
 
   ws.on('close', () => {
     set.delete(ws);
+    if (sessionClan.has(code)) notifyClan(sessionClan.get(code));
     if (keepsOpen(ws) && ![...set].some(keepsOpen)) hostAway.set(code, Date.now());
     if (set.size) {
       broadcast(code, { type: 'members', members: members(code) });

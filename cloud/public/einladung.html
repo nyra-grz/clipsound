@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Einladung – ClipSound</title>
+<style>
+  :root { --bg: #0c0e16; --panel: rgba(255,255,255,.05); --text: #f4f5fa; --muted: #8a8fa6; --line: rgba(255,255,255,.09); --accent: #ffc371; }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text); min-height: 100vh; display: grid; place-items: center;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    background: radial-gradient(900px 500px at 10% -10%, rgba(255,95,109,.16), transparent 60%),
+                radial-gradient(800px 500px at 100% 0%, rgba(127,127,213,.16), transparent 60%), var(--bg);
+  }
+  main { width: 100%; max-width: 440px; padding: 24px 16px; }
+  .card { padding: 24px; border-radius: 20px; background: var(--panel); border: 1px solid var(--line); text-align: center; }
+  .logo { font-size: 40px; }
+  h1 { font-size: 24px; margin: 8px 0 4px; letter-spacing: -.02em; }
+  p { color: var(--muted); margin: 8px 0; }
+  .code { display: inline-block; margin: 14px 0 6px; padding: 10px 18px; border-radius: 12px; border: 1px solid var(--line);
+          font: 700 26px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; background: rgba(255,255,255,.04); }
+  ol { text-align: left; color: #d5d8e6; padding-left: 22px; margin: 16px 0 0; }
+  li { margin: 6px 0; }
+  .btn { display: inline-block; margin-top: 18px; padding: 10px 16px; border-radius: 12px; color: #1a1205; font-weight: 650; text-decoration: none;
+         background: linear-gradient(135deg, #ff5f6d, #ffc371); border: 0; cursor: pointer; font-size: 15px; }
+  .small { font-size: 13px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <div class="logo">🔊</div>
+    <h1 id="title">Einladung zu einem Clan</h1>
+    <p id="sub">Einen Moment …</p>
+    <div class="code" id="code"></div>
+    <div><button class="btn" id="copy">Code kopieren</button></div>
+    <ol>
+      <li>ClipSound öffnen (Mac, Windows, Linux oder iPhone).</li>
+      <li>Auf <b>Clans</b> tippen und anmelden.</li>
+      <li>Bei <b>Clan beitreten</b> den Code eingeben – du bist sofort drin.</li>
+    </ol>
+    <p class="small">Noch kein ClipSound? <a href="https://github.com/nyra-grz/clipsound/releases/latest">Hier laden</a> · <a href="/datenschutz">Datenschutz</a></p>
+  </div>
+</main>
+<script>
+const code = decodeURIComponent(location.pathname.split('/').pop() || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+document.getElementById('code').textContent = code;
+document.getElementById('copy').onclick = async e => {
+  try { await navigator.clipboard.writeText(code); e.target.textContent = 'Kopiert ✓'; } catch { e.target.textContent = code; }
+};
+fetch('/api/clans/invite/' + encodeURIComponent(code)).then(r => r.json()).then(d => {
+  if (!d.clan) { document.getElementById('title').textContent = 'Einladung abgelaufen'; document.getElementById('sub').textContent = d.error || 'Frag nach einem neuen Code.'; return; }
+  document.getElementById('title').textContent = d.clan.name;
+  document.getElementById('sub').textContent = `Du wurdest in diesen Clan eingeladen · ${d.clan.members} ${d.clan.members === 1 ? 'Mitglied' : 'Mitglieder'}`;
+  document.title = `${d.clan.name} – Einladung zu ClipSound`;
+}).catch(() => { document.getElementById('sub').textContent = 'Keine Verbindung zum Server.'; });
+</script>
+</body>
+</html>
