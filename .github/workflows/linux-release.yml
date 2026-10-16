@@ -111,3 +111,76 @@ jobs:
         with:
           name: start-${{ matrix.runner }}-${{ strategy.job-index }}
           path: w/out
+
+  # Was passiert im Dateimanager (Nautilus), wenn man ClipSound bzw. install.sh doppelklickt (= markieren + Enter)?
+  doppelklick:
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['ubuntu:26.04', 'fedora:latest']
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Archiv laden
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ github.event.inputs.tag || github.event.release.tag_name }}"
+          mkdir -p w/out
+          gh release download ${tag:+"$tag"} -R ${{ github.repository }} -p "ClipSound-Linux-x64.tar.gz" -O w/app.tar.gz
+
+      - name: Prüfskript
+        run: |
+          cat > w/setup.sh <<'EOF'
+          set -e
+          if command -v apt-get >/dev/null; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends nautilus gnome-text-editor libgtk-4-1 libadwaita-1-0 adwaita-icon-theme \
+              librsvg2-common libgl1-mesa-dri libegl1 xvfb dbus-x11 xdotool imagemagick procps xdg-user-dirs fonts-cantarell >/dev/null
+          else
+            dnf install -y -q nautilus gnome-text-editor gtk4 libadwaita adwaita-icon-theme librsvg2 mesa-dri-drivers mesa-libEGL \
+              xorg-x11-server-Xvfb dbus-x11 xdotool ImageMagick procps-ng xdg-user-dirs >/dev/null
+          fi
+          echo "Nautilus $(nautilus --version 2>/dev/null)"
+          useradd -m tester
+          chmod -R a+rwX /w
+          runuser -u tester -- bash /w/test.sh
+          EOF
+
+          cat > w/test.sh <<'EOF'
+          cd ~
+          out=/w/out
+          tar xzf /w/app.tar.gz
+          export XDG_RUNTIME_DIR=/tmp/rt-$(id -u); mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 & sleep 2
+          export DISPLAY=:99
+          eval "$(dbus-launch --sh-syntax)"
+          gsettings get org.gnome.nautilus.preferences executable-text-activation 2>/dev/null | sed 's/^/Einstellung Skripte: /'
+
+          klick() { # datei name
+            nautilus --select "$1" > $out/nautilus-$2.log 2>&1 &
+            sleep 10
+            w=$(xdotool search --onlyvisible --class nautilus | tail -1)
+            xdotool windowactivate --sync "$w" 2>/dev/null || xdotool windowfocus --sync "$w"
+            sleep 1
+            xdotool key --window "$w" Return
+            sleep 10
+            import -window root $out/$2.png
+            echo "== Doppelklick auf $2"
+            pgrep -af "ClipSound/ClipSound" | grep -v pgrep && echo "→ ClipSound läuft" || echo "→ ClipSound läuft NICHT"
+            pgrep -af "gnome-text-editor" | grep -v pgrep && echo "→ Texteditor geöffnet"
+            for i in $(xdotool search --onlyvisible --name . 2>/dev/null); do echo "Fenster: $(xdotool getwindowname $i)"; done | sort -u
+            pkill -f ClipSound/ClipSound; pkill gnome-text-editor; nautilus -q 2>/dev/null; sleep 2
+          }
+          klick ~/ClipSound/ClipSound programm
+          klick ~/ClipSound/install.sh install
+          EOF
+
+      - name: Doppelklick (${{ matrix.image }})
+        run: docker run --rm -v "$PWD/w:/w" ${{ matrix.image }} bash /w/setup.sh
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: doppelklick-${{ strategy.job-index }}
+          path: w/out
