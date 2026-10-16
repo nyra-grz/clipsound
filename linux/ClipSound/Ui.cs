@@ -77,6 +77,25 @@ public static class Ui
         return box;
     }
 
+    /// <summary>Kopf wie eine kompakte Statusseite (Symbol, Titel, Text) – aber ohne eigenen Scrollbereich,
+    /// damit nichts abgeschnitten wird, wenn sie in einer scrollenden Seite steckt</summary>
+    public static Gtk.Box Hero(string icon, string title, string description)
+    {
+        var image = Gtk.Image.NewFromIconName(icon);
+        image.SetPixelSize(64);
+        image.AddCssClass("dim-label");
+        var heading = Label(title, "title-2");
+        var text = Label(description, "dim-label");
+        heading.SetXalign(0.5f);
+        heading.SetJustify(Gtk.Justification.Center);
+        text.SetXalign(0.5f);
+        text.SetJustify(Gtk.Justification.Center);
+        var box = VBox(6, image, heading, text);
+        image.SetMarginBottom(12);
+        box.SetMarginTop(12);
+        return box;
+    }
+
     public static Gtk.Box VBox(int spacing, params Gtk.Widget[] children) => Box(Gtk.Orientation.Vertical, spacing, children);
     public static Gtk.Box HBox(int spacing, params Gtk.Widget[] children) => Box(Gtk.Orientation.Horizontal, spacing, children);
 

@@ -145,7 +145,8 @@ public static class Updater
         // Unter Linux darf man eine laufende Datei ersetzen – sie bleibt bis zum Beenden im Speicher
         var staged = exe + ".neu";
         File.Copy(newExe, staged, true);
-        File.SetUnixFileMode(staged, File.GetUnixFileMode(newExe) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(staged, File.GetUnixFileMode(newExe) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         File.Move(staged, exe, true);
         DeleteDirectory(work);
         Process.Start(new ProcessStartInfo(exe, "--updated") { UseShellExecute = false, WorkingDirectory = dir });

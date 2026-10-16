@@ -13,6 +13,8 @@ jobs:
   build-and-check:
     # Ubuntu 24.04 hat genau die Mindestversionen: GTK 4.14 und libadwaita 1.5
     runs-on: ubuntu-24.04
+    env:
+      GTK_A11Y: none   # keine Bildschirmleser-Verbindung im Test (sonst nur Warnungen)
     steps:
       - uses: actions/checkout@v4
 
@@ -23,7 +25,7 @@ jobs:
       - name: GTK, libadwaita, X-Server ohne Bildschirm, Ton ohne Lautsprecher
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libgtk-4-1 libadwaita-1-0 adwaita-icon-theme libgl1-mesa-dri \
+          sudo apt-get install -y -qq --no-install-recommends libgtk-4-1 libadwaita-1-0 adwaita-icon-theme librsvg2-common libgl1-mesa-dri \
             xvfb xdotool dbus-x11 pulseaudio pulseaudio-utils ffmpeg desktop-file-utils fonts-cantarell >/dev/null
 
       - name: Bauen (x64 und arm64)

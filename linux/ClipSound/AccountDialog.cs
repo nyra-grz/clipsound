@@ -83,11 +83,9 @@ public sealed class AccountDialog
         problem.SetVisible(false);
         void Problem(string? text) { problem.SetText(text ?? ""); problem.SetVisible(!string.IsNullOrEmpty(text)); }
 
-        var status = Adw.StatusPage.New();
-        status.SetIconName(_mode == 2 ? "mail-unread-symbolic" : "system-users-symbolic");
-        status.SetTitle(_mode == 2 ? "E-Mail bestätigen" : "ClipSound-Clans");
-        status.SetDescription(_mode == 2 ? $"Wir haben einen 6-stelligen Code an {_email} geschickt." : "Melde dich an, um Clans beizutreten und zusammen abzuspielen.");
-        status.AddCssClass("compact");
+        var status = Ui.Hero(_mode == 2 ? "mail-unread-symbolic" : "system-users-symbolic",
+            _mode == 2 ? "E-Mail bestätigen" : "ClipSound-Clans",
+            _mode == 2 ? $"Wir haben einen 6-stelligen Code an {_email} geschickt." : "Melde dich an, um Clans beizutreten und zusammen abzuspielen.");
 
         if (_mode == 2)
         {
@@ -270,18 +268,17 @@ public sealed class ClanPage
         var r = Room;
 
         // Kopf + Session
-        var status = Adw.StatusPage.New();
-        status.SetIconName(r.Owner || r.IsAdmin ? "starred-symbolic" : "system-users-symbolic");
-        status.SetTitle(r.Name);
-        status.SetDescription($"{(r.Owner ? "Besitzer" : r.IsAdmin ? "Admin" : "Mitglied")} · {r.OnlineCount} von {r.Members.Count} online");
-        status.AddCssClass("compact");
+        var status = Ui.Hero(r.Owner || r.IsAdmin ? "starred-symbolic" : "system-users-symbolic", r.Name,
+            $"{(r.Owner ? "Besitzer" : r.IsAdmin ? "Admin" : "Mitglied")} · {r.OnlineCount} von {r.Members.Count} online");
         var session = Ui.Button(r.SessionCode is null ? "Clan-Session starten" : "Session beitreten", () => _ = r.StartSessionAsync(), "pill", "suggested-action");
         session.SetHalign(Gtk.Align.Center);
         var inSession = r.Members.Where(m => m.InSession).Select(m => m.Name).ToList();
         var sessionHint = Ui.Label(inSession.Count == 0 ? "Alle im Clan können beitreten und gemeinsam abspielen." : "Gerade in der Session: " + string.Join(", ", inSession), "dim-label");
         sessionHint.SetXalign(0.5f);
         sessionHint.SetJustify(Gtk.Justification.Center);
-        status.SetChild(Ui.VBox(12, session, sessionHint));
+        var sessionBox = Ui.VBox(12, session, sessionHint);
+        sessionBox.SetMarginTop(12);
+        status.Append(sessionBox);
         _body.Append(status);
 
         // Einladen

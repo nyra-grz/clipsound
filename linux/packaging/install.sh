@@ -22,6 +22,10 @@ missing=""
 for lib in libgtk-4.so.1 libadwaita-1.so.0; do
   if ! (ldconfig -p 2>/dev/null | grep -q "$lib") && ! ls /usr/lib*/"$lib" /usr/lib/*/"$lib" >/dev/null 2>&1; then missing="$missing $lib"; fi
 done
+# Ohne SVG-Lader zeigt GTK statt der Symbole nur Platzhalter (auf Desktops ist er fast immer schon da)
+if command -v dpkg >/dev/null 2>&1 && ! dpkg -s librsvg2-common >/dev/null 2>&1; then
+  echo "Hinweis: Für die Symbole fehlt der SVG-Lader:  sudo apt install librsvg2-common"
+fi
 if [ -n "$missing" ]; then
   echo "Hinweis: Es fehlt noch:$missing"
   echo "  Ubuntu, Debian, Mint, Pop!_OS:  sudo apt install libadwaita-1-0"
