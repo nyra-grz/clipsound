@@ -129,13 +129,39 @@ public static class Updater
         var newExe = Directory.EnumerateFiles(extracted, "ClipSound", SearchOption.AllDirectories).FirstOrDefault()
             ?? throw new InvalidOperationException("Das heruntergeladene Update ist beschädigt.");
 
+        // Symbole usw. mitnehmen: erst daneben auspacken, dann in einem Rutsch tauschen
+        var newAssets = Path.Combine(Path.GetDirectoryName(newExe)!, "Assets");
+        if (Directory.Exists(newAssets))
+        {
+            string assets = Path.Combine(dir, "Assets"), stagedAssets = assets + ".neu", oldAssets = assets + ".alt";
+            DeleteDirectory(stagedAssets);
+            DeleteDirectory(oldAssets);
+            CopyDirectory(newAssets, stagedAssets);
+            if (Directory.Exists(assets)) Directory.Move(assets, oldAssets);
+            Directory.Move(stagedAssets, assets);
+            DeleteDirectory(oldAssets);
+        }
+
         // Unter Linux darf man eine laufende Datei ersetzen – sie bleibt bis zum Beenden im Speicher
         var staged = exe + ".neu";
         File.Copy(newExe, staged, true);
         File.SetUnixFileMode(staged, File.GetUnixFileMode(newExe) | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
         File.Move(staged, exe, true);
+        DeleteDirectory(work);
         Process.Start(new ProcessStartInfo(exe, "--updated") { UseShellExecute = false, WorkingDirectory = dir });
         quit();
+    }
+
+    private static void CopyDirectory(string from, string to)
+    {
+        Directory.CreateDirectory(to);
+        foreach (var file in Directory.EnumerateFiles(from)) File.Copy(file, Path.Combine(to, Path.GetFileName(file)), true);
+        foreach (var sub in Directory.EnumerateDirectories(from)) CopyDirectory(sub, Path.Combine(to, Path.GetFileName(sub)));
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        try { if (Directory.Exists(path)) Directory.Delete(path, true); } catch { }
     }
 
     public static bool IsNewer(string a, string b)

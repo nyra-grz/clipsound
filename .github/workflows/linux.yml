@@ -1,0 +1,192 @@
+name: Linux
+
+on:
+  push:
+    paths: ['linux/**', 'windows/ClipSound/Lobby.cs', 'windows/ClipSound/Account.cs', 'windows/ClipSound/Share.cs', 'VERSION', '.github/workflows/linux.yml']
+  workflow_dispatch:
+    inputs:
+      mac_lobby:
+        description: 'Code einer offenen Lobby (z. B. vom Mac) – Linux tritt bei und drückt den ersten Sound'
+        required: false
+
+jobs:
+  build-and-check:
+    # Ubuntu 24.04 hat genau die Mindestversionen: GTK 4.14 und libadwaita 1.5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: GTK, libadwaita, X-Server ohne Bildschirm, Ton ohne Lautsprecher
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libgtk-4-1 libadwaita-1-0 adwaita-icon-theme libgl1-mesa-dri \
+            xvfb xdotool dbus-x11 pulseaudio pulseaudio-utils ffmpeg desktop-file-utils fonts-cantarell >/dev/null
+
+      - name: Bauen (x64 und arm64)
+        run: |
+          linux/build.sh
+          ls -la linux/dist
+          mkdir -p app shots
+          tar -xzf linux/dist/ClipSound-Linux-x64.tar.gz -C app
+          ls -la app/ClipSound
+
+      - name: Bildschirm, Sitzungsbus und Ton starten
+        run: |
+          Xvfb :99 -screen 0 1280x900x24 >/dev/null 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+          eval "$(dbus-launch --sh-syntax)"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=leise >/dev/null
+          pactl set-default-sink leise
+          pactl info | grep -E "Server|Standard|Default"
+          sleep 2
+
+      - name: Test-Sounds erzeugen (Sinustöne)
+        run: |
+          mkdir -p testlib/Sounds empty/Sounds
+          python3 - <<'EOF'
+          import math, struct, wave
+          names = ['vine-boom','bruh','airhorn','metal-pipe-clang','sad-violin','wow','oof','emotional-damage','windows-error','taco-bell-bong','among-us-drip-theme-song','dun-dun-dun']
+          for i, n in enumerate(names):
+              with wave.open(f'testlib/Sounds/{n}.wav', 'wb') as w:
+                  w.setnchannels(1); w.setsampwidth(2); w.setframerate(22050)
+                  w.writeframes(b''.join(struct.pack('<h', int(8000 * math.sin(2 * math.pi * (220 + 40 * i) * s / 22050))) for s in range(22050)))
+          EOF
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=500:duration=1" testlib/flac-test.flac
+
+      - name: App starten – Bilder und Selbsttest
+        run: |
+          A=app/ClipSound/ClipSound
+          n=0
+          run() {
+            n=$((n + 1))
+            timeout 60 "$A" "$@" > "shots/log-$n.txt" 2>&1 || echo "Zeitüberschreitung/Fehler ($?): $*"
+            grep -iE "critical|unhandled|exception" "shots/log-$n.txt" | head -5 || true
+          }
+          run --library testlib/Sounds --snapshot shots/1-normal.png --selftest shots/selftest.txt --import-test windows/testdata
+          run --library testlib/Sounds --size 420x700 --snapshot shots/2-schmal.png
+          run --library testlib/Sounds --recorder --snapshot shots/3-taste.png
+          run --library empty/Sounds --snapshot shots/4-leer.png
+          run --library testlib/Sounds --settings --snapshot shots/5-einstellungen.png
+          run --library testlib/Sounds --lobby --snapshot shots/6-lobby.png
+          run --library testlib/Sounds --account --snapshot shots/7-konto.png
+          run --library testlib/Sounds --about --snapshot shots/8-info.png
+          mkdir -p flaclib/Sounds && cp testlib/flac-test.flac flaclib/Sounds/
+          run --library flaclib/Sounds --selftest shots/selftest-flac.txt
+          ls -la shots
+          for f in shots/selftest*.txt; do echo "== $f"; cat "$f"; done
+          grep -q "Wiedergabe .*läuft" shots/selftest.txt || { echo "Wiedergabe geht nicht"; exit 1; }
+          grep -q "Import: 4 übernommen, 0 abgelehnt" shots/selftest.txt || { echo "Import geht nicht"; exit 1; }
+          grep -q "Strg+Umschalt+K global: aktiv=True" shots/selftest.txt || { echo "Globale Taste geht nicht"; exit 1; }
+          grep -q "Wiedergabe .*läuft" shots/selftest-flac.txt || { echo "FLAC über ffmpeg geht nicht"; exit 1; }
+          for p in 1-normal 2-schmal 3-taste 4-leer 5-einstellungen 6-lobby 7-konto 8-info; do [ -s "shots/$p.png" ] || { echo "Bild fehlt: $p"; exit 1; }; done
+
+      - name: Globaler Kürzel Alt+2 (App im Hintergrund)
+        run: |
+          app/ClipSound/ClipSound --library testlib/Sounds --hotkey-test shots/hotkey.txt > shots/log-hotkey.txt 2>&1 &
+          sleep 6
+          xdotool key --clearmodifiers alt+2
+          wait $! || true
+          cat shots/hotkey.txt
+          grep -q "ausgelöst für" shots/hotkey.txt || { echo "Alt+2 hat nicht ausgelöst"; exit 1; }
+
+      - name: Nur eine Instanz (zweiter Start holt das Fenster nach vorne)
+        run: |
+          app/ClipSound/ClipSound --library testlib/Sounds > shots/log-instanz-1.txt 2>&1 &
+          first=$!
+          sleep 6
+          timeout 15 app/ClipSound/ClipSound --library testlib/Sounds > shots/log-instanz-2.txt 2>&1; second=$?
+          sleep 1
+          kill -0 $first 2>/dev/null && alive=ja || alive=nein
+          echo "zweiter Start: Exit $second, erste Instanz läuft weiter: $alive" | tee shots/eine-instanz.txt
+          kill $first 2>/dev/null || true
+          [ "$second" = 0 ] && [ "$alive" = ja ]
+
+      - name: install.sh (ohne Root) und wieder entfernen
+        run: |
+          app/ClipSound/install.sh
+          D="$HOME/.local/share"
+          desktop-file-validate "$D/applications/at.timur.ClipSound.desktop"
+          grep Exec= "$D/applications/at.timur.ClipSound.desktop"
+          test -x "$D/clipsound/ClipSound" && test -d "$D/clipsound/Assets/icons" && test -f "$D/icons/hicolor/512x512/apps/clipsound.png"
+          timeout 60 "$HOME/.local/bin/clipsound" --library testlib/Sounds --snapshot shots/9-installiert.png > shots/log-installiert.txt 2>&1
+          test -s shots/9-installiert.png
+          app/ClipSound/install.sh --remove
+          test ! -e "$D/clipsound" && test ! -e "$HOME/.local/bin/clipsound"
+
+      - name: Update testen (tut so, als wäre 1.0 installiert)
+        run: |
+          # geht erst, wenn das neueste Release ein Linux-Archiv hat
+          if ! curl -sf https://api.github.com/repos/${{ github.repository }}/releases/latest | grep -q '"name": "ClipSound-Linux-x64.tar.gz"'; then
+            echo "::notice::Neuestes Release hat noch kein Linux-Archiv – Update-Test übersprungen"; exit 0
+          fi
+          cp -R app/ClipSound upd
+          rm -rf upd/Assets/icons/hicolor/scalable   # fehlende Symbole muss das Update zurückbringen
+          before=$(stat -c %i upd/ClipSound)
+          upd/ClipSound --library testlib/Sounds --pretend-version 1.0 --update-now > shots/log-update.txt 2>&1 &
+          ok=nein
+          for i in $(seq 1 60); do sleep 2; [ "$(stat -c %i upd/ClipSound)" != "$before" ] && { ok=ja; break; }; done
+          sleep 8   # neue Version startet
+          pgrep -f "upd/ClipSound --updated" >/dev/null && running=ja || running=nein
+          [ -d upd/Assets/icons/hicolor/scalable ] && assets=ja || assets=nein
+          { echo "Programm ausgetauscht: $ok (nach $((i * 2)) s)"; echo "neue Version läuft: $running"; echo "Symbole zurück: $assets";
+            echo "Reste: $(ls -d upd/*.neu upd/*.alt 2>/dev/null | wc -l)"; } | tee shots/update-test.txt
+          pkill -f upd/ClipSound || true
+          [ "$ok" = ja ] && [ "$running" = ja ] && [ "$assets" = ja ]
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Lobby (Crossplay mit dem echten Server)
+        run: |
+          (cd cloud && npm ci --silent)
+          url=https://rooms-production-8e28.up.railway.app
+          A=app/ClipSound/ClipSound
+          mkdir -p guestlib/Sounds
+
+          # 1) Fremder Host (gleiches Protokoll wie Mac/Windows/Browser), Linux tritt bei
+          node cloud/lobby-tool.mjs host $url windows/testdata 60 > shots/lobby-node-host.txt 2>&1 &
+          for i in $(seq 1 30); do grep -q CODE shots/lobby-node-host.txt && break; sleep 1; done
+          code=$(grep -oE 'CODE \w+' shots/lobby-node-host.txt | head -1 | cut -d' ' -f2)
+          echo "Lobby vom Testhost: $code"
+          timeout 60 $A --library guestlib/Sounds --lobby-join "${code,,}" --lobby-play-first --lobby-accept --lobby-log shots/lobby-linux-gast.txt --lobby-exit-after 25 > shots/log-lobby-gast.txt 2>&1 || true
+          echo "== Linux als Gast"; cat shots/lobby-linux-gast.txt
+          echo "== Testhost"; cut -c1-150 shots/lobby-node-host.txt
+
+          # 2) Linux ist Host, fremder Gast tritt bei, drückt und fragt
+          $A --library testlib/Sounds --lobby-host --lobby-accept --lobby-log shots/lobby-linux-host.txt --lobby-exit-after 30 > shots/log-lobby-host.txt 2>&1 &
+          host=$!
+          for i in $(seq 1 30); do sleep 1; grep -qE 'hochgeladen=([0-9]+)/\1' shots/lobby-linux-host.txt 2>/dev/null && break; done
+          code2=$(grep -oE 'code=\w{5}' shots/lobby-linux-host.txt | head -1 | cut -d= -f2)
+          [ -n "$code2" ] || { echo "Linux-Host hat keine Lobby geöffnet"; cat shots/lobby-linux-host.txt shots/log-lobby-host.txt; exit 1; }
+          echo "Linux-Lobby: $code2"
+          node cloud/lobby-tool.mjs guest $url $code2 10 | tee shots/lobby-node-gast.txt | cut -c1-150
+          wait $host || true
+          echo "== Linux als Host"; cat shots/lobby-linux-host.txt
+
+          # 3) Optional: echte Lobby vom Mac
+          if [ -n "${{ github.event.inputs.mac_lobby }}" ]; then
+            timeout 60 $A --library guestlib/Sounds --lobby-join "${{ github.event.inputs.mac_lobby }}" --lobby-play-first --lobby-log shots/lobby-mac.txt --lobby-exit-after 30 || true
+            echo "== Linux in der Mac-Lobby"; cat shots/lobby-mac.txt
+          fi
+
+          grep -q ' play ' shots/lobby-linux-gast.txt && [ "$(grep -c bekommen shots/lobby-linux-gast.txt)" -ge 2 ] \
+            && grep -q ' play ' shots/lobby-linux-host.txt && grep -q '"ok":true' shots/lobby-node-gast.txt \
+            || { echo "Lobby-Test fehlgeschlagen"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-check
+          path: shots
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ClipSound-Linux
+          path: linux/dist/*.tar.gz

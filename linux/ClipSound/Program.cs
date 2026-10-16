@@ -10,7 +10,15 @@ internal static class Program
         // sonst würde sie die alte (gleich weg) bitten, sich zu zeigen, und selbst gleich wieder gehen
         if (args.Contains("--updated")) Thread.Sleep(1500);
 
-        Adw.Module.Initialize();
+        try { Adw.Module.Initialize(); }
+        catch (Exception e) when (e is DllNotFoundException or TypeInitializationException or EntryPointNotFoundException)
+        {
+            return TooOld("ClipSound braucht GTK 4 und libadwaita – die fehlen hier noch.");
+        }
+        // Adw.Dialog & Co. gibt es erst ab libadwaita 1.5 (GTK 4.14)
+        if ((Adw.Functions.GetMajorVersion() == 1 && Adw.Functions.GetMinorVersion() < 5) || Gtk.Functions.GetMinorVersion() < 14)
+            return TooOld($"ClipSound braucht libadwaita 1.5 oder neuer (hier: {Adw.Functions.GetMajorVersion()}.{Adw.Functions.GetMinorVersion()}).");
+
         // Testläufe dürfen mehrere Instanzen haben; sonst holt ein zweiter Start nur das Fenster nach vorne
         var app = Adw.Application.New(AppId, MainWindow.TestMode ? Gio.ApplicationFlags.NonUnique : Gio.ApplicationFlags.DefaultFlags);
         MainWindow? window = null;
@@ -32,5 +40,16 @@ internal static class Program
         };
         // Eigene Startargumente nicht an GTK weitergeben (das kennt --library usw. nicht)
         return app.RunWithSynchronizationContext(null);
+    }
+
+    /// <summary>Ohne passendes GTK kein Fenster – Hinweis im Terminal und als Systembenachrichtigung</summary>
+    private static int TooOld(string problem)
+    {
+        const string hint = "Ubuntu/Debian/Mint: sudo apt install libadwaita-1-0 · Fedora: sudo dnf install libadwaita · Arch: sudo pacman -S libadwaita. "
+                          + "Ältere Systeme (z. B. Ubuntu 22.04) bitte auf eine neuere Version aktualisieren.";
+        Console.Error.WriteLine(problem);
+        Console.Error.WriteLine(hint);
+        try { System.Diagnostics.Process.Start("notify-send", new[] { "-i", "dialog-error", "ClipSound", problem + "\n" + hint })?.WaitForExit(3000); } catch { }
+        return 1;
     }
 }

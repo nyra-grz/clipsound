@@ -19,5 +19,3 @@ linux/**/obj/
 ios/build/
 ios/build-sim/
 ios/ClipSound.xcodeproj/
-linux/**/bin/
-linux/**/obj/
