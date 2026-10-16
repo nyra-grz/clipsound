@@ -1,0 +1,19 @@
+ClipSound für Linux
+===================
+
+Installieren (für deinen Nutzer, ohne Root):   ./install.sh
+Entfernen:                                      ./install.sh --remove
+Ohne Installation starten:                      ./ClipSound
+
+Braucht GTK 4 und libadwaita – bei Ubuntu 24.04+, Fedora 40+, Debian 13, Linux Mint 22,
+Pop!_OS, Arch, Manjaro und openSUSE Tumbleweed ist das schon dabei bzw. mit einem Befehl
+installiert (install.sh sagt dir welchen). .NET musst du nicht installieren.
+
+Ton läuft über PulseAudio/PipeWire (sonst ALSA). MP3, WAV, OGG und AIFF spielt ClipSound
+selbst; für FLAC, M4A, AAC und Opus braucht es ffmpeg.
+
+Tastenkürzel im Hintergrund (z. B. in Spielen) gehen in X11-Sitzungen. Unter Wayland gehen
+sie, solange das ClipSound-Fenster aktiv ist.
+
+Deine Sounds liegen im Musik-Ordner unter „ClipSound“, Einstellungen in ~/.config/ClipSound.
+Datenschutz: https://rooms-production-8e28.up.railway.app/datenschutz

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=ClipSound
+GenericName=Soundboard
+Comment=Meme-Sounds per Klick oder Taste – zusammen in Lobbys und Clans
+Exec=@EXEC@
+Icon=clipsound
+Terminal=false
+Categories=AudioVideo;Audio;Player;
+Keywords=sound;soundboard;meme;lobby;clan;
+StartupWMClass=at.timur.ClipSound
+StartupNotify=true

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    ClipSound für Linux – native Oberfläche mit GTK 4 + libadwaita (wie GNOME-Apps, folgt hell/dunkel und der
+    Akzentfarbe des Systems). Lobby, Konto/Clans und das Weitergeben von Sounds teilt sich die App mit Windows
+    (gleicher Code, gleiches Protokoll → Crossplay mit Mac, Windows, iPhone und Browser).
+    Braucht GTK ≥ 4.14 und libadwaita ≥ 1.5 (Ubuntu 24.04, Fedora 40, Debian 13, Mint 22, Arch, openSUSE …).
+    Bauen: linux/build.sh
+  -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>ClipSound</AssemblyName>
+    <RootNamespace>ClipSound</RootNamespace>
+    <!-- Version kommt aus der Datei VERSION im Hauptordner -->
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)../../VERSION').Trim())</Version>
+    <Product>ClipSound</Product>
+    <!-- Ohne ICU: läuft auch auf schlanken Distributionen, die libicu nicht installiert haben -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GirCore.Adw-1" Version="0.8.1" />
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="NAudio.Vorbis" Version="1.5.0" />
+    <PackageReference Include="NLayer.NAudioSupport" Version="1.4.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Gemeinsam mit Windows: Lobby, Konto & Clans, Sounds von Gerät zu Gerät -->
+    <Compile Include="../../windows/ClipSound/Lobby.cs" Link="Gemeinsam/Lobby.cs" />
+    <Compile Include="../../windows/ClipSound/Account.cs" Link="Gemeinsam/Account.cs" />
+    <Compile Include="../../windows/ClipSound/Share.cs" Link="Gemeinsam/Share.cs" />
+    <!-- Symbole (Rückfall, falls das System-Symbolthema eines nicht hat) und das App-Symbol -->
+    <None Include="Assets/icons/**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

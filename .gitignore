@@ -11,8 +11,13 @@ macos/dist/
 windows/dist/
 windows/**/bin/
 windows/**/obj/
+linux/dist/
+linux/**/bin/
+linux/**/obj/
 
 # iOS (Projekt wird mit xcodegen erzeugt)
 ios/build/
 ios/build-sim/
 ios/ClipSound.xcodeproj/
+linux/**/bin/
+linux/**/obj/
