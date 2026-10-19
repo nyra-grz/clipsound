@@ -2,12 +2,13 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
-/// Verbindet Bibliothek, Player und Tastenkürzel
+/// Verbindet Bibliothek, Player, Tastenkürzel und Bilder
 final class Board: ObservableObject {
     let library: SoundLibrary
     let player = SoundPlayer()
     let lobby = Lobby()
     let keys: KeyBindStore
+    let images: SoundImages
     private let hotKeys = GlobalHotKeys.shared
 
     @Published var query = ""
@@ -24,6 +25,7 @@ final class Board: ObservableObject {
     init(library: SoundLibrary) {
         self.library = library
         keys = KeyBindStore(file: library.settingsFolder.appendingPathComponent("keybinds.json"))
+        images = SoundImages(folder: library.settingsFolder.appendingPathComponent("Bilder", isDirectory: true))
 
         hotKeys.onPress = { [weak self] id in
             guard let self, self.recording == nil, let sound = self.library.sounds.first(where: { $0.id == id }) else { return }
@@ -83,14 +85,32 @@ final class Board: ObservableObject {
         if lobby.active { lobby.stopAll() }
     }
 
-    func playFirstVisible() {
-        if inGuestLobby { if let first = visibleLobby.first { play(first) } }
+    /// Enter im Suchfeld: ersten Treffer abspielen (auf der Lobby-Seite die Sounds des Hosts)
+    func playFirstVisible(inLobby: Bool) {
+        if inLobby { if let first = visibleLobby.first { play(first) } }
         else if let first = visible.first { play(first) }
     }
 
     func delete(_ sound: Sound) {
         keys.set(nil, for: sound.id)
+        images.remove(sound.id)
         library.delete(sound)
+    }
+
+    // MARK: Bilder
+
+    func chooseImage(for sound: Sound) {
+        let panel = NSOpenPanel()
+        panel.message = "Bild für „\(sound.title)“ auswählen"
+        panel.prompt = "Auswählen"
+        panel.allowedContentTypes = [.image]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        if !images.set(contentsOf: url, for: sound.id) { problem = "„\(url.lastPathComponent)“ ist kein Bild, das ClipSound lesen kann." }
+    }
+
+    func pasteImage(for sound: Sound) {
+        guard let image = NSImage(pasteboard: .general) else { problem = "In der Zwischenablage ist kein Bild."; return }
+        if !images.set(image, for: sound.id) { problem = "Das Bild aus der Zwischenablage konnte nicht übernommen werden." }
     }
 
     func hotKeyState(for sound: Sound) -> HotKeyState {
@@ -195,40 +215,102 @@ final class Board: ObservableObject {
     }
 }
 
+/// Seiten in der Seitenleiste
+enum Page: Hashable {
+    case sounds, lobby, account
+    case clan(String)
+
+    /// Startargument --page sounds|lobby|account|clan (clan = erster Clan)
+    init?(launchArg: String?) {
+        switch launchArg {
+        case "sounds": self = .sounds
+        case "lobby": self = .lobby
+        case "account": self = .account
+        case "clan": self = .clan("")
+        default: return nil
+        }
+    }
+}
+
+/// Größe der Sound-Kacheln (Darstellung → Kachelgröße, ⌘+ / ⌘-)
+enum TileSize: String, CaseIterable, Identifiable {
+    case small, medium, large
+    static let key = "tileSize"
+    var id: Self { self }
+
+    var title: String {
+        switch self { case .small: "Klein"; case .medium: "Mittel"; case .large: "Groß" }
+    }
+    var minWidth: CGFloat { switch self { case .small: 150; case .medium: 188; case .large: 236 } }
+    var height: CGFloat { switch self { case .small: 92; case .medium: 112; case .large: 140 } }
+    var radius: CGFloat { switch self { case .small: 16; case .medium: 20; case .large: 24 } }
+    var font: CGFloat { switch self { case .small: 13; case .medium: 14; case .large: 16 } }
+    var symbol: CGFloat { switch self { case .small: 16; case .medium: 19; case .large: 23 } }
+    var padding: CGFloat { switch self { case .small: 11; case .medium: 13; case .large: 15 } }
+
+    var bigger: TileSize? { switch self { case .small: .medium; case .medium: .large; case .large: nil } }
+    var smaller: TileSize? { switch self { case .small: nil; case .medium: .small; case .large: .medium } }
+}
+
 struct ContentView: View {
     @ObservedObject var board: Board
     @ObservedObject var library: SoundLibrary
     @ObservedObject var player: SoundPlayer
     @ObservedObject var keys: KeyBindStore
     @ObservedObject var updater: Updater
+    @ObservedObject var images: SoundImages
+    @ObservedObject private var account = Account.shared
+    @State private var page: Page? = Page(launchArg: LaunchArgs.value("--page")) ?? .sounds
     @State private var dropTargeted = false
+    /// Beim Ziehen: Kachel unter dem Mauszeiger (ein Bild landet dort)
+    @State private var dropTile: String?
+    /// Wo die Kacheln gerade im Fenster liegen (Koordinatenraum „drop“)
+    @State private var tileFrames: [String: CGRect] = [:]
     @State private var updateDismissed = false
     @State private var pendingDelete: Sound?
-    @State private var showLobby = false
-    @State private var showAccount = false
-    @ObservedObject private var account = Account.shared
+    @AppStorage(TileSize.key) private var tileSize: TileSize = .medium
 
     init(board: Board, updater: Updater) {
         self.board = board
         self.library = board.library
         self.player = board.player
         self.keys = board.keys
+        self.images = board.images
         self.updater = updater
     }
 
     var body: some View {
-        soundArea
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .bottom) { LobbyNote(lobby: board.lobby) }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            VStack(spacing: 0) {
-                updateBar
-                if board.lobby.active { LobbyBar(lobby: board.lobby, showLobby: $showLobby) }
-            }
+        NavigationSplitView {
+            Sidebar(page: $page, library: library, lobby: board.lobby, account: account)
+        } detail: {
+            detail
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .edgeBar(.top) { updateBanner }
+                .edgeBar(.bottom) {
+                    VStack(spacing: 10) {
+                        LobbyNote(lobby: board.lobby)
+                        PlayerBar(board: board, player: player, lobby: board.lobby) { page = .lobby }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 14)
+                }
         }
-        .sheet(isPresented: $showLobby) { LobbySheet(lobby: board.lobby, library: library) }
-        .sheet(isPresented: $showAccount) { AccountSheet(account: account, lobby: board.lobby, library: library) }
+        .coordinateSpace(.named("drop"))
+        .onPreferenceChange(TileFrameKey.self) { tileFrames = $0 }
         .onAppear { account.attach(library) } // Clan-Sounds von diesem Mac aus weitergeben
+        // --page clan: ersten Clan zeigen, sobald die Clans geladen sind
+        .onChange(of: account.clans) { _, clans in
+            if case .clan("") = page, let first = clans.first { page = .clan(first.id) }
+        }
+        // Lobby geöffnet, beigetreten oder Clan-Session gestartet: dorthin wechseln
+        .onChange(of: board.lobby.phase) { old, new in if old == .off && new != .off { page = .lobby } }
+        .onChange(of: account.loggedIn) { _, loggedIn in
+            if !loggedIn, case .clan = page { page = .account }
+        }
+        // ⌘F oder „/“ auf einer Seite ohne Suche: zu den Sounds
+        .onChange(of: board.searchFocused) { _, focused in
+            if focused && page != .sounds && !(page == .lobby && board.inGuestLobby) { page = .sounds }
+        }
         .alert(requestTitle, isPresented: requestShown, presenting: board.lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { board.lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { board.lobby.answer(request, ok: false) }
@@ -237,18 +319,11 @@ struct ContentView: View {
                  ? "Der Sound wird in die Bibliothek von \(request.by) kopiert."
                  : "Der Sound wird in deine Bibliothek kopiert.")
         }
-        .background(.background)
         .overlay { if dropTargeted { dropHighlight } }
         .overlay { if let sound = board.recording { recorder(for: sound) } }
-        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
-            loadDropped(providers)
-            return true
-        }
-        .navigationTitle("ClipSound")
-        .navigationSubtitle(subtitle)
-        .searchable(text: $board.query, isPresented: $board.searchFocused, placement: .toolbar, prompt: "Suchen")
-        .onSubmit(of: .search) { board.playFirstVisible() }
-        .toolbar { toolbar }
+        .animation(.spring(response: 0.35, dampingFraction: 0.85), value: board.recording)
+        .onDrop(of: [.fileURL, .image], delegate: SoundDrop(targeted: $dropTargeted, tile: $dropTile,
+                                                            tileAt: tile(at:), perform: handleDrop))
         .confirmationDialog("„\(pendingDelete?.title ?? "")“ löschen?", isPresented: deleteDialogShown, presenting: pendingDelete) { sound in
             Button("In den Papierkorb legen", role: .destructive) { board.delete(sound) }
         } message: { _ in
@@ -276,18 +351,37 @@ struct ContentView: View {
         }
     }
 
-    private var soundArea: some View {
+    @ViewBuilder private var detail: some View {
+        switch page ?? .sounds {
+        case .sounds:
+            soundsPage
+        case .lobby:
+            LobbyPage(board: board, lobby: board.lobby, library: library, player: player, tileSize: tileSize)
+        case .account:
+            AccountPage(account: account) { page = .clan($0) }
+        case .clan(let id):
+            if let clan = account.clans.first(where: { $0.id == id }) {
+                ClanPage(account: account, lobby: board.lobby, library: library, clan: clan) { page = .account }
+                    .id(id)
+            } else {
+                ContentUnavailableView("Clan nicht gefunden", systemImage: "person.3",
+                                       description: Text("Vielleicht bist du nicht mehr Mitglied."))
+            }
+        }
+    }
+
+    // MARK: Sounds
+
+    private var soundsPage: some View {
         Group {
-            if board.inGuestLobby {
-                lobbyGrid
-            } else if library.sounds.isEmpty {
+            if library.sounds.isEmpty {
                 ContentUnavailableView {
                     Label("Keine Sounds", systemImage: "waveform")
                 } description: {
                     Text("Zieh Sound-Dateien oder einen ganzen Ordner in dieses Fenster.")
                 } actions: {
                     Button("Sounds importieren …", action: board.openImportPanel)
-                        .buttonStyle(.borderedProminent)
+                        .glassButton(prominent: true)
                         .controlSize(.large)
                 }
             } else if board.visible.isEmpty {
@@ -296,21 +390,39 @@ struct ContentView: View {
                 grid
             }
         }
+        .navigationTitle("Sounds")
+        .navigationSubtitle(library.sounds.count == 1 ? "1 Sound" : "\(library.sounds.count) Sounds")
+        .searchable(text: $board.query, isPresented: $board.searchFocused, placement: .toolbar, prompt: "Suchen")
+        .onSubmit(of: .search) { board.playFirstVisible(inLobby: false) }
+        .toolbar { soundsToolbar }
     }
 
     private var grid: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: tileSize.minWidth), spacing: 14)], spacing: 14) {
                 ForEach(board.visible) { sound in
                     PadView(sound: sound,
                             bind: keys.binds[sound.id],
                             hotKey: board.hotKeyState(for: sound),
                             progress: player.progress[sound.id],
+                            image: images.images[sound.id],
+                            dropTarget: dropTile == sound.id,
+                            size: tileSize,
                             onPlay: { board.play(sound) },
                             onEditKey: { board.startRecording(sound) })
+                    .background(GeometryReader { geo in
+                        Color.clear.preference(key: TileFrameKey.self, value: [sound.id: geo.frame(in: .named("drop"))])
+                    })
                     .contextMenu {
                         Button("Abspielen", systemImage: "play") { board.play(sound) }
                         Button("Taste festlegen …", systemImage: "keyboard") { board.startRecording(sound) }
+                        Divider()
+                        Button(images.images[sound.id] == nil ? "Bild hinzufügen …" : "Bild ändern …", systemImage: "photo") { board.chooseImage(for: sound) }
+                        Button("Bild aus der Zwischenablage", systemImage: "doc.on.clipboard") { board.pasteImage(for: sound) }
+                        if images.images[sound.id] != nil {
+                            Button("Bild entfernen", systemImage: "xmark.circle") { images.remove(sound.id) }
+                        }
+                        Divider()
                         Button("Im Finder zeigen", systemImage: "folder") { library.revealInFinder(sound) }
                         if board.lobby.isHost && !board.lobby.guests.isEmpty {
                             Menu("Schenken an", systemImage: "gift") {
@@ -324,39 +436,28 @@ struct ContentView: View {
                     }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 18)
             .id(board.hotKeyRevision)
+            .animation(.spring(response: 0.4, dampingFraction: 0.85), value: tileSize)
         }
+        .softScrollEdges()
     }
 
-    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+    @ToolbarContentBuilder private var soundsToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .primaryAction) {
             Button("Importieren", systemImage: "plus", action: board.openImportPanel)
                 .help("Sound-Dateien oder einen Ordner importieren (⌘O)")
 
-            Button("Alles stoppen", systemImage: "stop.fill", action: board.stopAll)
-                .help(board.lobby.active ? "Bei allen in der Lobby stoppen (Esc)" : "Alles stoppen (Esc)")
-                .disabled(player.progress.isEmpty && !board.lobby.active)
-
-            Toggle(isOn: $player.overlap) {
-                Label("Überlappen", systemImage: "square.stack.3d.up")
+            Menu("Darstellung", systemImage: "square.grid.2x2") {
+                Picker("Kachelgröße", selection: $tileSize) {
+                    ForEach(TileSize.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                Button("Sound-Ordner im Finder zeigen", systemImage: "folder") { library.revealInFinder() }
             }
-            .help("Mehrere Sounds gleichzeitig abspielen")
-        }
-        ToolbarItem(placement: .primaryAction) {
-            VolumeControl(volume: $player.volume, lobby: board.lobby)
-        }
-        ToolbarItem(placement: .navigation) {
-            Button { showLobby = true } label: {
-                Label("Lobby", systemImage: board.lobby.active ? "person.2.fill" : "person.2")
-            }
-            .help("Zusammen abspielen: Lobby öffnen oder mit Code beitreten")
-        }
-        ToolbarItem(placement: .navigation) {
-            Button { showAccount = true } label: {
-                Label("Konto & Clans", systemImage: account.loggedIn ? "person.crop.circle.fill" : "person.crop.circle")
-            }
-            .help(account.loggedIn ? "Konto und Clans" : "Anmelden für Clans")
+            .help("Kachelgröße und Sound-Ordner")
         }
     }
 
@@ -365,87 +466,104 @@ struct ContentView: View {
     private func recorder(for sound: Sound) -> some View {
         let bind = keys.binds[sound.id]
         return ZStack {
-            Color.black.opacity(0.25).ignoresSafeArea()
+            Color.black.opacity(0.4).ignoresSafeArea()
                 .onTapGesture { board.stopRecording() }
-            VStack(spacing: 14) {
-                Text("Taste für „\(sound.title)“")
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                Text(bind?.display ?? "–")
-                    .font(.system(size: 28, weight: .medium).monospaced())
-                    .frame(minWidth: 90, minHeight: 54)
-                    .padding(.horizontal, 14)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                Text("Drück eine Taste oder Kombination.")
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 18) {
+                IconTile(systemImage: "keyboard.fill", color: PadView.tint(for: sound.id), size: 54)
+                VStack(spacing: 4) {
+                    Text("Taste für „\(sound.title)“")
+                        .font(.title3.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                    Text("Drück eine Taste oder Kombination.")
+                        .foregroundStyle(.secondary)
+                }
+                KeyCap(text: bind?.display ?? "–")
                 Label("Mit ⌃ (ctrl) oder ⌥ (alt) geht sie überall, auch wenn ClipSound im Hintergrund ist – z. B. in Spielen oder Discord.",
                       systemImage: "globe")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
-                    .frame(maxWidth: 300)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let note = board.recorderNote {
                     Text(note)
                         .font(.callout)
                         .foregroundStyle(.orange)
                         .multilineTextAlignment(.center)
-                        .frame(maxWidth: 300)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack {
                     Button("Taste entfernen", action: board.removeBind)
+                        .glassButton()
                         .disabled(bind == nil)
                         .help("⌫")
                     Spacer()
                     Button("Fertig", action: board.stopRecording)
+                        .glassButton(prominent: true)
                         .keyboardShortcut(.defaultAction)
                         .help("Esc")
                 }
-                .frame(width: 300)
+                .controlSize(.large)
             }
-            .padding(24)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .shadow(color: .black.opacity(0.2), radius: 20, y: 8)
+            .padding(28)
+            .frame(width: 380)
+            // Mattglas unter dem Glas, damit der viele Text auf den bunten Kacheln lesbar bleibt
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 34, style: .continuous))
+            .glassSurface(RoundedRectangle(cornerRadius: 34, style: .continuous))
+            .transition(.scale(scale: 0.92).combined(with: .opacity))
         }
     }
 
+    private var dropLabel: String {
+        guard let id = dropTile, let sound = library.sounds.first(where: { $0.id == id }) else { return "Loslassen zum Importieren" }
+        return "Bild auf „\(sound.title)“ · Sounds in die Bibliothek"
+    }
+
     private var dropHighlight: some View {
-        RoundedRectangle(cornerRadius: 12)
-            .strokeBorder(Color.accentColor, lineWidth: 3)
-            .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-            .padding(8)
-            .allowsHitTesting(false)
+        ZStack {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10, 7]))
+                .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .padding(10)
+            Label(dropLabel, systemImage: dropTile == nil ? "square.and.arrow.down.fill" : "photo.fill")
+                .font(.title3.weight(.semibold))
+                .padding(.horizontal, 22)
+                .padding(.vertical, 14)
+                .glassSurface(Capsule())
+        }
+        .allowsHitTesting(false)
     }
 
     // MARK: Update
 
-    @ViewBuilder private var updateBar: some View {
+    @ViewBuilder private var updateBanner: some View {
         if let release = updater.available, !updateDismissed || updater.state == .downloading {
-            VStack(spacing: 0) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.down.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                        .font(.title3)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("ClipSound \(release.version) ist verfügbar").font(.headline)
-                        Text("Du hast \(updater.currentVersion).").font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    if updater.state == .downloading {
-                        ProgressView().controlSize(.small)
-                        Text("Wird installiert …").foregroundStyle(.secondary)
-                    } else {
-                        Button("Was ist neu?") { updater.openReleasePage() }
-                            .buttonStyle(.link)
-                        Button("Später") { updateDismissed = true }
-                        Button("Jetzt aktualisieren") { Task { await updater.install() } }
-                            .buttonStyle(.borderedProminent)
-                    }
+            HStack(spacing: 12) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 40, height: 40)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("ClipSound \(release.version) ist da").font(.headline)
+                    Text("Du hast \(updater.currentVersion).").font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 10)
-                Divider()
+                Spacer(minLength: 12)
+                if updater.state == .downloading {
+                    ProgressView().controlSize(.small)
+                    Text("Wird installiert …").foregroundStyle(.secondary)
+                } else {
+                    Button("Was ist neu?") { updater.openReleasePage() }
+                        .buttonStyle(.link)
+                    Button("Später") { updateDismissed = true }
+                        .glassButton()
+                    Button("Jetzt aktualisieren") { Task { await updater.install() } }
+                        .glassButton(prominent: true)
+                }
             }
-            .background(.bar)
+            .padding(.leading, 12)
+            .padding(.trailing, 14)
+            .padding(.vertical, 10)
+            .glassSurface(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .padding(.horizontal, 16)
+            .padding(.top, 8)
         }
     }
 
@@ -459,12 +577,6 @@ struct ContentView: View {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
     }
 
-    private var subtitle: String {
-        let n = board.inGuestLobby ? board.lobby.sounds.count : library.sounds.count
-        let count = n == 1 ? "1 Sound" : "\(n) Sounds"
-        return board.inGuestLobby ? "Lobby von \(board.lobby.hostName) · \(count)" : count
-    }
-
     private var requestTitle: String {
         guard let r = board.lobby.requests.first else { return "" }
         return r.kind == .asked ? "\(r.by) möchte „\(r.soundTitle)“ behalten" : "\(r.by) schenkt dir „\(r.soundTitle)“"
@@ -475,58 +587,289 @@ struct ContentView: View {
     }
 
     private var lobbyProblemShown: Binding<Bool> {
-        Binding(get: { board.lobby.problem != nil && !showLobby }, set: { if !$0 { board.lobby.problem = nil } })
-    }
-
-    // MARK: Lobby als Gast
-
-    @ViewBuilder private var lobbyGrid: some View {
-        if board.lobby.sounds.isEmpty {
-            ContentUnavailableView {
-                Label(board.lobby.phase == .open ? "Noch keine Sounds" : "Verbinde …", systemImage: "person.2")
-            } description: {
-                Text(board.lobby.phase == .open ? "\(board.lobby.hostName) hat noch keine Sounds freigegeben." : "Einen Moment.")
-            }
-        } else if board.visibleLobby.isEmpty {
-            ContentUnavailableView.search(text: board.query)
-        } else {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
-                    ForEach(board.visibleLobby) { sound in
-                        PadView(sound: Sound(url: URL(fileURLWithPath: sound.name)),
-                                bind: nil,
-                                hotKey: .local,
-                                progress: sound.local.flatMap { player.progress[$0.id] },
-                                loading: sound.local == nil,
-                                onPlay: { board.play(sound) },
-                                onEditKey: {})
-                        .contextMenu {
-                            Button("Abspielen", systemImage: "play") { board.play(sound) }
-                            Button("Behalten …", systemImage: "square.and.arrow.down") { board.lobby.ask(sound) }
-                        }
-                    }
-                }
-                .padding(16)
-            }
-        }
+        Binding(get: { board.lobby.problem != nil && page != .lobby }, set: { if !$0 { board.lobby.problem = nil } })
     }
 
     private var problemShown: Binding<Bool> {
         Binding(get: { board.problem != nil }, set: { if !$0 { board.problem = nil } })
     }
 
-    private func loadDropped(_ providers: [NSItemProvider]) {
+    private func tile(at point: CGPoint) -> String? {
+        tileFrames.first { $0.value.contains(point) }?.key
+    }
+
+    /// Hineingezogen: Sound-Dateien werden importiert, ein Bild auf einer Kachel wird ihr Bild
+    private func handleDrop(_ providers: [NSItemProvider], onTile tileID: String?) {
         let group = DispatchGroup()
         var urls: [URL] = []
+        var pictures: [NSImage] = [] // Bilder ohne Datei, z. B. aus dem Browser
         let lock = NSLock()
         for provider in providers {
             group.enter()
-            _ = provider.loadObject(ofClass: URL.self) { url, _ in
-                if let url { lock.lock(); urls.append(url); lock.unlock() }
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                _ = provider.loadObject(ofClass: URL.self) { url, _ in
+                    if let url { lock.lock(); urls.append(url); lock.unlock() }
+                    group.leave()
+                }
+            } else if provider.canLoadObject(ofClass: NSImage.self) {
+                _ = provider.loadObject(ofClass: NSImage.self) { image, _ in
+                    if let image = image as? NSImage { lock.lock(); pictures.append(image); lock.unlock() }
+                    group.leave()
+                }
+            } else {
                 group.leave()
             }
         }
-        group.notify(queue: .main) { board.importItems(urls) }
+        group.notify(queue: .main) {
+            let isImage = { (url: URL) in UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true }
+            let sounds = urls.filter { !isImage($0) }
+            if !sounds.isEmpty { board.importItems(sounds) }
+            guard let picture = urls.first(where: isImage).flatMap(NSImage.init(contentsOf:)) ?? pictures.first else { return }
+            if let id = tileID, library.sounds.contains(where: { $0.id == id }) {
+                if !images.set(picture, for: id) { board.problem = "Das Bild konnte nicht übernommen werden." }
+            } else if sounds.isEmpty {
+                board.problem = "Zieh das Bild direkt auf einen Sound."
+            }
+        }
+    }
+}
+
+/// Rahmen der Sound-Kacheln, damit ein hineingezogenes Bild auf der richtigen Kachel landet
+struct TileFrameKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue()) { $1 }
+    }
+}
+
+/// Ziehen ins Fenster: merkt sich die Kachel unter dem Mauszeiger
+struct SoundDrop: DropDelegate {
+    @Binding var targeted: Bool
+    @Binding var tile: String?
+    let tileAt: (CGPoint) -> String?
+    let perform: ([NSItemProvider], String?) -> Void
+
+    private func track(_ info: DropInfo) {
+        let id = info.hasItemsConforming(to: [.image, .fileURL]) ? tileAt(info.location) : nil
+        if id != tile { tile = id }
+    }
+
+    func dropEntered(info: DropInfo) { targeted = true; track(info) }
+    func dropUpdated(info: DropInfo) -> DropProposal? { track(info); return DropProposal(operation: .copy) }
+    func dropExited(info: DropInfo) { targeted = false; tile = nil }
+
+    func performDrop(info: DropInfo) -> Bool {
+        let id = tileAt(info.location)
+        targeted = false
+        tile = nil
+        perform(info.itemProviders(for: [.fileURL, .image]), id)
+        return true
+    }
+}
+
+// MARK: - Seitenleiste
+
+struct Sidebar: View {
+    @Binding var page: Page?
+    @ObservedObject var library: SoundLibrary
+    @ObservedObject var lobby: Lobby
+    @ObservedObject var account: Account
+
+    var body: some View {
+        List(selection: $page) {
+            Section("Bibliothek") {
+                Label("Sounds", systemImage: "waveform")
+                    .badge(library.sounds.count)
+                    .tag(Page.sounds)
+            }
+            Section("Zusammen") {
+                Label("Lobby", systemImage: lobby.active ? "person.2.wave.2.fill" : "person.2.wave.2")
+                    .badge(lobby.active ? Text(lobby.code).monospaced() : nil)
+                    .tag(Page.lobby)
+            }
+            Section("Clans") {
+                ForEach(account.clans) { clan in
+                    Label {
+                        Text(clan.name)
+                    } icon: {
+                        ClanIcon(name: clan.name, key: clan.id, size: 18)
+                    }
+                    .tag(Page.clan(clan.id))
+                }
+                Button { page = .account } label: {
+                    Label(account.loggedIn ? "Clan hinzufügen …" : "Anmelden für Clans …", systemImage: "plus.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .navigationSplitViewColumnWidth(min: 200, ideal: 230, max: 320)
+        .safeAreaInset(edge: .bottom, spacing: 0) { accountButton }
+    }
+
+    /// Konto unten in der Seitenleiste (wie im App Store)
+    private var accountButton: some View {
+        Button { page = .account } label: {
+            HStack(spacing: 10) {
+                if let user = account.user {
+                    Avatar(name: user.name, size: 32)
+                } else {
+                    Image(systemName: "person.crop.circle.fill")
+                        .font(.system(size: 30))
+                        .symbolRenderingMode(.hierarchical)
+                        .foregroundStyle(.secondary)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(account.user?.name ?? "Anmelden")
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    Text(account.loggedIn ? "Konto & Clans" : "Für Clans mit Freunden")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(8)
+            .background(page == .account ? AnyShapeStyle(.fill.tertiary) : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(10)
+    }
+}
+
+// MARK: - Wiedergabe-Leiste (schwebt unten, Liquid Glass)
+
+/// Lobby, was gerade läuft, Stopp, Überlappen und Lautstärke. Die Glas-Teile fließen ineinander,
+/// wenn etwas dazukommt oder verschwindet.
+struct PlayerBar: View {
+    let board: Board
+    @ObservedObject var player: SoundPlayer
+    @ObservedObject var lobby: Lobby
+    let openLobby: () -> Void
+    @Namespace private var glass
+
+    var body: some View {
+        GlassGroup(spacing: 10) {
+            HStack(spacing: 10) {
+                if lobby.active {
+                    lobbyChip
+                        .glassSurface(Capsule(), interactive: true)
+                        .glassID("lobby", in: glass)
+                }
+                if let channel = player.channels.last {
+                    nowPlaying(channel)
+                        .glassSurface(Capsule())
+                        .glassID("playing", in: glass)
+                }
+                controls
+                    .glassSurface(Capsule())
+                    .glassID("controls", in: glass)
+            }
+        }
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: player.channels.last?.id)
+        .animation(.spring(response: 0.45, dampingFraction: 0.82), value: lobby.active)
+    }
+
+    private var lobbyChip: some View {
+        Button(action: openLobby) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(lobby.phase == .open ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+                Text(lobby.code)
+                    .font(.callout.monospaced().weight(.semibold))
+                Label("\(lobby.members.count)", systemImage: "person.2.fill")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .labelStyle(.titleAndIcon)
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 44)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .help("Lobby öffnen")
+    }
+
+    private func nowPlaying(_ channel: SoundPlayer.Channel) -> some View {
+        let tint = Palette.color(for: channel.soundID)
+        return HStack(spacing: 10) {
+            Group {
+                if let image = board.images.images[channel.soundID] {
+                    Image(nsImage: image).resizable().scaledToFill()
+                } else {
+                    Image(systemName: "waveform")
+                        .symbolEffect(.variableColor.iterative, isActive: true)
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .background(Palette.gradient(tint))
+                }
+            }
+            .frame(width: 30, height: 30)
+            .background(Palette.gradient(tint))
+            .clipShape(Circle())
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 6) {
+                    Text(channel.title)
+                        .font(.callout.weight(.semibold))
+                        .lineLimit(1)
+                    if player.channels.count > 1 {
+                        Text("+\(player.channels.count - 1)")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.primary.opacity(0.12))
+                        Capsule().fill(tint).frame(width: max(3, geo.size.width * channel.progress))
+                    }
+                }
+                .frame(height: 3)
+            }
+            .frame(minWidth: 70, maxWidth: 168, alignment: .leading)
+        }
+        .padding(.leading, 7)
+        .padding(.trailing, 16)
+        .frame(height: 44)
+        .help(player.channels.map(\.title).joined(separator: ", "))
+    }
+
+    private var controls: some View {
+        let playing = !player.progress.isEmpty
+        return HStack(spacing: 2) {
+            Button(action: board.stopAll) {
+                Image(systemName: "stop.fill")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(playing ? Color.primary : Color.secondary)
+                    .frame(width: 34, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .help(lobby.active ? "Bei allen in der Lobby stoppen (Esc)" : "Alles stoppen (Esc)")
+            .disabled(!playing && !lobby.active)
+
+            Button { player.overlap.toggle() } label: {
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(player.overlap ? Color.white : Color.secondary)
+                    .frame(width: 34, height: 30)
+                    .background(Circle().fill(player.overlap ? Color.accentColor : .clear))
+                    .contentShape(Rectangle())
+            }
+            .help(player.overlap ? "Überlappen ist an: mehrere Sounds gleichzeitig (⌘L)" : "Überlappen: mehrere Sounds gleichzeitig (⌘L)")
+
+            Divider()
+                .frame(height: 20)
+                .padding(.horizontal, 8)
+
+            VolumeControl(volume: $player.volume, lobby: lobby)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .frame(height: 44)
     }
 }
 
@@ -538,13 +881,14 @@ struct VolumeControl: View {
     @State private var showVolumes = false
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "speaker.wave.2.fill", variableValue: min(volume, 1))
+        HStack(spacing: 8) {
+            Image(systemName: "speaker.wave.3.fill", variableValue: min(volume, 1))
+                .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 18)
+                .frame(width: 22)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 3) { showVolumes = true } // 3× tippen: System-Lautstärke (in der Lobby alle Geräte)
-                .popover(isPresented: $showVolumes, arrowEdge: .bottom) {
+                .popover(isPresented: $showVolumes, arrowEdge: .top) {
                     if lobby.active { VolumeMixer(lobby: lobby) } else { SystemVolumePopover() }
                 }
                 .onChange(of: lobby.active) { _, active in
@@ -552,15 +896,16 @@ struct VolumeControl: View {
                 }
             Slider(value: $volume, in: 0...SoundPlayer.maxVolume)
                 .controlSize(.small)
-                .frame(width: 110)
+                .frame(minWidth: 60, maxWidth: 120)
             Text(volume, format: .percent.precision(.fractionLength(0)))
+                .font(.callout.weight(.medium))
                 .monospacedDigit()
                 .foregroundStyle(volume > 1 ? Color.orange : Color.secondary)
-                .frame(width: 42, alignment: .trailing)
+                .frame(width: 46, alignment: .trailing)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 3) { showVolumes = true } // auch hier: 3× → System-Lautstärke
         }
-        .padding(.horizontal, 4)
+        .padding(.trailing, 4)
         .help(volume > 1 ? "Verstärkt – über 100 % kann es übersteuern" : "Lautstärke")
     }
 }
@@ -607,72 +952,99 @@ struct SystemVolumePopover: View {
 
 // MARK: - Kachel
 
+/// Sound-Kachel im Stil der Kurzbefehle-App: Farbverlauf, weißes Symbol, Taste als Glas-Kapsel
 struct PadView: View {
     let sound: Sound
     let bind: KeyBind?
     let hotKey: Board.HotKeyState
     let progress: Double?
     var loading = false
+    /// Eigenes Bild statt Farbverlauf
+    var image: NSImage? = nil
+    /// Gerade wird ein Bild über diese Kachel gezogen
+    var dropTarget = false
+    var size: TileSize = .medium
     let onPlay: () -> Void
     let onEditKey: () -> Void
 
     @State private var hovering = false
 
-    /// Feste Systemfarbe pro Sound, damit man Kacheln (und Mischpult-Kanäle) wiedererkennt
-    static func tint(for id: String) -> Color {
-        let colors: [Color] = [.blue, .purple, .pink, .orange, .green, .teal, .indigo, .red]
-        var h: UInt32 = 0
-        for unit in id.utf16 { h = h &* 31 &+ UInt32(unit) }
-        return colors[Int(h % UInt32(colors.count))]
-    }
+    /// Feste Systemfarbe pro Sound, damit man Kacheln wiedererkennt
+    static func tint(for id: String) -> Color { Palette.color(for: id) }
 
     private var tint: Color { Self.tint(for: sound.id) }
 
     var body: some View {
         let playing = progress != nil
-        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
 
         Button(action: onPlay) {
             VStack(alignment: .leading, spacing: 0) {
                 Image(systemName: playing ? "speaker.wave.2.fill" : "waveform")
                     .symbolEffect(.variableColor.iterative, isActive: playing)
-                    .font(.system(size: 15, weight: .medium))
-                    .foregroundStyle(tint)
-                    .frame(width: 22, height: 20, alignment: .leading)
+                    .font(.system(size: size.symbol, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(image == nil ? 0 : 0.5), radius: 2, y: 1)
+                    .frame(height: size.symbol + 6, alignment: .leading)
                 Spacer(minLength: 6)
                 Text(sound.title)
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.primary)
+                    .font(.system(size: size.font, weight: .semibold))
+                    .foregroundStyle(.white)
                     .lineLimit(2)
                     .multilineTextAlignment(.leading)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .shadow(color: .black.opacity(image == nil ? 0.12 : 0.6), radius: image == nil ? 1 : 3, y: 1)
             }
-            .padding(10)
-            .frame(height: 86)
-            .background {
-                shape.fill(playing ? AnyShapeStyle(tint.opacity(0.14)) : AnyShapeStyle(hovering ? .quaternary : .quinary))
-            }
+            .padding(size.padding)
+            .frame(height: size.height)
+            .background { tileBackground }
+            .clipShape(shape)
             .overlay(alignment: .bottom) {
                 if let progress {
                     GeometryReader { geo in
-                        Capsule().fill(tint)
-                            .frame(width: max(4, geo.size.width * progress), height: 3)
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(.white.opacity(0.3))
+                            Capsule().fill(.white).frame(width: max(4, geo.size.width * progress))
+                        }
                     }
-                    .frame(height: 3)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 4)
+                    .frame(height: 4)
+                    .padding(.horizontal, size.padding)
+                    .padding(.bottom, 6)
                 }
             }
-            .overlay { shape.strokeBorder(playing ? tint.opacity(0.7) : Color.primary.opacity(0.08), lineWidth: 1) }
+            .overlay { shape.strokeBorder(.white.opacity(playing ? 0.65 : 0.12), lineWidth: playing ? 1.5 : 1) }
+            .overlay { if dropTarget { shape.strokeBorder(Color.accentColor, lineWidth: 3) } }
             .contentShape(shape)
         }
         .buttonStyle(PadButtonStyle())
-        .opacity(loading ? 0.5 : 1)
-        .overlay(alignment: .topTrailing) { if loading { ProgressView().controlSize(.mini).padding(10) } }
+        .saturation(loading ? 0.15 : 1)
+        .opacity(loading ? 0.55 : 1)
+        .shadow(color: playing ? tint.opacity(0.25) : .black.opacity(hovering ? 0.2 : 0.1),
+                radius: playing ? 6 : hovering ? 6 : 3, y: hovering ? 3 : 2)
+        .overlay(alignment: .topTrailing) {
+            if loading { ProgressView().controlSize(.small).padding(12) }
+        }
         // Tasten-Badge liegt außerhalb des Kachel-Buttons, damit er eigene Klicks bekommt
-        .overlay(alignment: .topTrailing) { keyBadge.padding(8) }
+        .overlay(alignment: .topTrailing) { keyBadge.padding(size.padding - 3) }
+        .scaleEffect(dropTarget ? 1.05 : hovering && !loading ? 1.025 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovering)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: dropTarget)
+        .animation(.easeOut(duration: 0.2), value: playing)
         .onHover { hovering = $0 }
         .help(sound.id)
+    }
+
+    /// Bild (unten abgedunkelt, damit der Titel lesbar bleibt) oder Farbverlauf
+    @ViewBuilder private var tileBackground: some View {
+        if let image {
+            Image(nsImage: image)
+                .resizable()
+                .scaledToFill()
+                .overlay(LinearGradient(colors: [.black.opacity(0.1), .black.opacity(0.35), .black.opacity(0.75)],
+                                        startPoint: .top, endPoint: .bottom))
+        } else {
+            Palette.tileGradient(tint)
+        }
     }
 
     @ViewBuilder private var keyBadge: some View {
@@ -680,26 +1052,26 @@ struct PadView: View {
             Button(action: onEditKey) {
                 HStack(spacing: 3) {
                     if hotKey == .global {
-                        Image(systemName: "globe").font(.system(size: 9, weight: .semibold))
+                        Image(systemName: "globe").font(.system(size: 9, weight: .bold))
                     } else if hotKey == .failed {
-                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(.orange)
+                        Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 9)).foregroundStyle(.yellow)
                     }
-                    Text(bind.display).font(.system(size: 11, weight: .medium).monospaced())
+                    Text(bind.display).font(.system(size: 11, weight: .bold, design: .rounded))
                 }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .glassSurface(Capsule(), clear: true, interactive: true)
             }
             .buttonStyle(.plain)
             .help(badgeHelp)
         } else if hovering {
             Button(action: onEditKey) {
                 Image(systemName: "keyboard")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 26, height: 20)
+                    .glassSurface(Capsule(), clear: true, interactive: true)
             }
             .buttonStyle(.plain)
             .help("Taste festlegen")
@@ -718,8 +1090,29 @@ struct PadView: View {
 struct PadButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .brightness(configuration.isPressed ? -0.06 : 0)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.2, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+/// Taste wie auf der Tastatur (Aufnahme-Fenster)
+struct KeyCap: View {
+    let text: String
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 14, style: .continuous)
+        Text(text)
+            .font(.system(size: 30, weight: .semibold, design: .rounded))
+            .frame(minWidth: 76, minHeight: 64)
+            .padding(.horizontal, 16)
+            .background {
+                shape.fill(Color(nsColor: .controlBackgroundColor))
+                    .shadow(color: .black.opacity(0.3), radius: 0, y: 3)
+                    .shadow(color: .black.opacity(0.15), radius: 10, y: 5)
+            }
+            .overlay(shape.strokeBorder(.separator))
+            .contentTransition(.numericText())
+            .animation(.snappy, value: text)
     }
 }

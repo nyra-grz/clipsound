@@ -6,7 +6,7 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 
 | Ordner | Was | Bauen / Starten |
 |---|---|---|
-| `macos/` | Mac-App (SwiftUI, AVAudioEngine) | `./macos/build-app.sh` → `macos/dist/ClipSound.app` |
+| `macos/` | Mac-App (SwiftUI im Liquid-Glass-Design ab macOS 26, AVAudioEngine) | `./macos/build-app.sh` → `macos/dist/ClipSound.app` |
 | `windows/` | Windows-App (WPF im Windows-11-Design, NAudio) | `dotnet publish windows/ClipSound -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o windows/dist` |
 | `linux/` | Linux-App (GTK 4 + libadwaita wie GNOME-Apps, C#) | `./linux/build.sh` → `linux/dist/ClipSound-Linux-x64.tar.gz` und `-arm64.tar.gz` |
 | `ios/` | iPhone- und iPad-App (SwiftUI) | `cd ios && xcodegen generate`, dann in Xcode öffnen |
@@ -28,6 +28,7 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 ## Allgemein
 
 - Mit **Überlappen** laufen mehrere Sounds gleichzeitig.
+- **Bilder** (Mac): Jeder Sound kann ein Bild bekommen – Rechtsklick → *Bild hinzufügen …*, *Bild aus der Zwischenablage* oder ein Bild direkt auf die Kachel ziehen. Die Bilder bleiben auf dem Mac (`~/Library/Application Support/ClipSound/Bilder`).
 - Die Apps starten leer. Sounds lassen sich einzeln oder als ganzer Ordner importieren, auch per Drag & Drop.
 - Auf dem iPhone liegen die Sounds in der Dateien-App unter *Auf meinem iPhone › ClipSound*.
 
@@ -50,7 +51,7 @@ Ein neues Release veröffentlichen:
 
 ## Voraussetzungen
 
-- Mac: macOS 15+, Xcode
+- Mac: macOS 15+ (Liquid Glass ab macOS 26). Zum Bauen Xcode 26 oder neuer – `actool` baut daraus das Icon (`macos/Resources/AppIcon.icon`, Icon Composer)
 - Windows: Windows 10/11 (64 Bit). Zum Bauen braucht man das .NET 10 SDK; der Build läuft auch auf macOS.
 - Linux: GTK 4.14+ und libadwaita 1.5+ – also Ubuntu 24.04, Fedora 40, Debian 13, Linux Mint 22, Pop!_OS 24.04 oder neuer, Arch, openSUSE Tumbleweed. x64 und ARM64. Installieren: Archiv entpacken, `./install.sh` (ohne Root; App-Menü, Symbol, Befehl `clipsound`). FLAC, M4A, AAC und Opus brauchen `ffmpeg`. Ton über PulseAudio/PipeWire, sonst ALSA.
 - iPhone: iOS 17+, Xcode und xcodegen

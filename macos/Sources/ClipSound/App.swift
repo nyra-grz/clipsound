@@ -12,6 +12,9 @@ import Combine
 //   --update-now         verfügbares Update ohne Nachfrage installieren
 //   --mixer-demo         drei Sounds gleichzeitig starten, einen auf 160 %, einen ausblenden, den ersten zurückdrehen (für Screenshots)
 //   --open-settings      Einstellungen gleich öffnen
+//   --page <seite>       mit dieser Seite starten: sounds, lobby, account oder clan (erster Clan)
+//   --appearance <a>     hell (light) oder dunkel (dark) erzwingen, z. B. für Bildschirmfotos
+//   --sound-image <bild> dieses Bild dem ersten Sound geben (zum Testen)
 //   --close-test         Hauptfenster nach 1 s wie mit dem roten Knopf schließen, Zustand ausgeben
 //   --icon <bild>        eigenes App-Icon setzen (wie in den Einstellungen)
 //   --selftest           ersten Sound mit 500 % abspielen, Status ausgeben und beenden
@@ -52,6 +55,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         CustomIcon.shared.apply()
+        switch LaunchArgs.value("--appearance") {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
         if let path = LaunchArgs.value("--icon") { CustomIcon.shared.set(from: URL(fileURLWithPath: path)) }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // Dialoge (z. B. „Importieren“) bekommen ihre Tasten selbst
@@ -72,6 +80,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if LaunchArgs.args.contains("--keytest") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.runKeytest() }
+        }
+        if let path = LaunchArgs.value("--sound-image") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                guard let board = self.board, let first = board.library.sounds.first else { return }
+                print("BILD: \(first.id) = \(board.images.set(contentsOf: URL(fileURLWithPath: path), for: first.id))"); fflush(stdout)
+            }
         }
         if LaunchArgs.args.contains("--recorder") {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
@@ -256,7 +270,7 @@ struct ClipSoundApp: App {
     var body: some Scene {
         Window("ClipSound", id: "main") {
             ContentView(board: board, updater: updater)
-                .frame(minWidth: 720, minHeight: 560)
+                .frame(minWidth: 820, minHeight: 580)
                 .onAppear { delegate.board = board }
                 .background(SettingsOnLaunch())
                 .task {
@@ -267,9 +281,13 @@ struct ClipSoundApp: App {
                     if LaunchArgs.args.contains("--update-now"), updater.available != nil { await updater.install() }
                 }
         }
-        .defaultSize(width: 980, height: 640)
+        .defaultSize(width: 1180, height: 760)
         .restorationBehavior(.disabled) // immer mit Fenster starten, auch wenn es beim Beenden zu war
         .commands {
+            SidebarCommands()
+            CommandGroup(after: .sidebar) {
+                TileSizeCommands()
+            }
             CommandGroup(after: .windowList) {
                 OpenMainWindowButton(title: "ClipSound-Fenster")
                     .keyboardShortcut("1")
@@ -333,6 +351,21 @@ struct OpenMainWindowButton: View {
             openWindow(id: "main")
             NSApp.activate()
         }
+    }
+}
+
+/// Darstellung → Kachelgröße (⌘+ / ⌘-)
+struct TileSizeCommands: View {
+    @AppStorage(TileSize.key) private var tileSize: TileSize = .medium
+
+    var body: some View {
+        Divider()
+        Button("Größere Kacheln") { if let next = tileSize.bigger { tileSize = next } }
+            .keyboardShortcut("+")
+            .disabled(tileSize.bigger == nil)
+        Button("Kleinere Kacheln") { if let next = tileSize.smaller { tileSize = next } }
+            .keyboardShortcut("-")
+            .disabled(tileSize.smaller == nil)
     }
 }
 

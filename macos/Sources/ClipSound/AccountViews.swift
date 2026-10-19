@@ -1,19 +1,9 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Gemeinsame Bausteine (übersichtlich, karten-basiert statt Formular)
+// MARK: - Gemeinsame Bausteine
 
-extension View {
-    /// Weicher Karten-Hintergrund.
-    func clanCard() -> some View {
-        padding(16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.quinary))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.separator.opacity(0.5)))
-    }
-}
-
-/// Rundes Monogramm aus den Initialen.
+/// Rundes Monogramm aus den Initialen, Farbe pro Name.
 struct Avatar: View {
     let name: String
     var size: CGFloat = 40
@@ -23,9 +13,27 @@ struct Avatar: View {
         return s.isEmpty ? "?" : s.uppercased()
     }
     var body: some View {
-        Circle().fill(Color.accentColor.gradient)
+        Circle().fill(Palette.gradient(Palette.color(for: name)))
             .frame(width: size, height: size)
-            .overlay(Text(initials).font(.system(size: size * 0.4, weight: .semibold)).foregroundStyle(.white))
+            .overlay(Text(initials).font(.system(size: size * 0.4, weight: .semibold, design: .rounded)).foregroundStyle(.white))
+            .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+    }
+}
+
+/// Clan-Symbol: Squircle mit dem ersten Buchstaben, Farbe pro Clan.
+struct ClanIcon: View {
+    let name: String
+    let key: String
+    var size: CGFloat = 32
+    var body: some View {
+        RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+            .fill(Palette.gradient(Palette.color(for: key)))
+            .frame(width: size, height: size)
+            .overlay {
+                Text(name.first.map { String($0).uppercased() } ?? "?")
+                    .font(.system(size: size * 0.5, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
     }
 }
 
@@ -42,26 +50,19 @@ struct Badge: View {
     }
 }
 
-// MARK: - Fenster
+// MARK: - Seite „Konto“
 
-struct AccountSheet: View {
+struct AccountPage: View {
     @ObservedObject var account: Account
-    let lobby: Lobby
-    let library: SoundLibrary
-    @Environment(\.dismiss) private var dismiss
+    let openClan: (String) -> Void
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if account.loggedIn { AccountHome(account: account, lobby: lobby, library: library) }
-                else { AccountAuth(account: account) }
-            }
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fertig") { dismiss() } } }
-            .navigationDestination(for: ClanSummary.self) { c in
-                ClanPage(account: account, lobby: lobby, library: library, clan: c)
-            }
+        Group {
+            if account.loggedIn { AccountHome(account: account, openClan: openClan) }
+            else { AccountAuth(account: account) }
         }
-        .frame(width: 540, height: 660)
+        .navigationTitle("Konto")
+        .navigationSubtitle(account.loggedIn ? "Konto & Clans" : "Anmelden")
     }
 }
 
@@ -78,34 +79,43 @@ private struct AccountAuth: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 18) {
-                Image(systemName: mode == .verify ? "envelope.badge" : "person.3.sequence.fill")
-                    .font(.system(size: 42)).foregroundStyle(.tint)
-                    .padding(.top, 24)
-                Text(mode == .verify ? "E-Mail bestätigen" : "ClipSound-Clans")
-                    .font(.title.weight(.bold))
-                Text(mode == .verify ? "Gib den Code aus der E-Mail ein." : "Melde dich an, um Clans beizutreten und zusammen abzuspielen.")
-                    .foregroundStyle(.secondary).multilineTextAlignment(.center)
+            VStack(spacing: 22) {
+                IconTile(systemImage: mode == .verify ? "envelope.badge.fill" : "person.3.sequence.fill",
+                         color: .orange, size: 84)
+                VStack(spacing: 6) {
+                    Text(mode == .verify ? "E-Mail bestätigen" : "ClipSound-Clans")
+                        .font(.largeTitle.weight(.bold))
+                    Text(mode == .verify ? "Gib den Code aus der E-Mail ein." : "Melde dich an, um Clans beizutreten und zusammen abzuspielen.")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
 
-                VStack(spacing: 12) {
+                VStack(spacing: 14) {
                     if mode == .verify {
                         Text("Code an \(email)").font(.callout).foregroundStyle(.secondary)
-                        TextField("6-stelliger Code", text: $code).textFieldStyle(.roundedBorder).font(.title3)
+                        TextField("6-stelliger Code", text: $code)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.title3.monospacedDigit())
+                            .multilineTextAlignment(.center)
                         Button {
                             Task { _ = await account.verify(email: email, code: code) }
                         } label: { Text("Bestätigen").frame(maxWidth: .infinity) }
-                            .buttonStyle(.borderedProminent).controlSize(.large)
+                            .glassButton(prominent: true)
                             .disabled(code.filter(\.isNumber).count < 6 || account.busy)
                         HStack {
                             Button("Code erneut senden") { Task { await account.resend(email: email) } }.buttonStyle(.link)
                             Spacer()
                             Button("Zurück") { mode = .login; account.problem = nil }.buttonStyle(.link)
                         }
+                        .font(.callout)
                     } else {
                         Picker("", selection: $mode) {
                             Text("Anmelden").tag(Mode.login)
                             Text("Registrieren").tag(Mode.register)
-                        }.pickerStyle(.segmented).labelsHidden()
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
 
                         TextField("E-Mail", text: $email).textFieldStyle(.roundedBorder)
                         if mode == .register { TextField("Name", text: $name).textFieldStyle(.roundedBorder) }
@@ -118,7 +128,8 @@ private struct AccountAuth: View {
                                 } else if await account.register(email: email, name: name, password: password) { mode = .verify }
                             }
                         } label: { Text(mode == .login ? "Anmelden" : "Registrieren").frame(maxWidth: .infinity) }
-                            .buttonStyle(.borderedProminent).controlSize(.large)
+                            .glassButton(prominent: true)
+                            .keyboardShortcut(.defaultAction)
                             .disabled(account.busy || email.isEmpty || password.isEmpty || (mode == .register && name.count < 2))
                     }
                     if account.busy { ProgressView().controlSize(.small) }
@@ -126,16 +137,22 @@ private struct AccountAuth: View {
                         Label(p, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout)
                     }
                 }
-                .clanCard()
-                .frame(maxWidth: 380)
+                .controlSize(.large)
+                .card(padding: 22)
+                .frame(maxWidth: 400)
+
                 Text("Mit einem Konto gilt die [Datenschutzerklärung](\(Account.privacyURL.absoluteString)). Deine Sounds bleiben auf deinen Geräten.")
-                    .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    .frame(maxWidth: 380)
-                Spacer()
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 400)
             }
+            .padding(32)
+            .padding(.top, 12)
             .frame(maxWidth: .infinity)
-            .padding(24)
         }
+        .softScrollEdges()
+        .animation(.snappy, value: mode)
     }
 }
 
@@ -143,8 +160,7 @@ private struct AccountAuth: View {
 
 private struct AccountHome: View {
     @ObservedObject var account: Account
-    let lobby: Lobby
-    let library: SoundLibrary
+    let openClan: (String) -> Void
     @State private var newClan = ""
     @State private var joinCode = ""
     @State private var note: String?
@@ -152,70 +168,75 @@ private struct AccountHome: View {
     @State private var password = ""
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                // Profil
-                HStack(spacing: 12) {
-                    Avatar(name: account.user?.name ?? "?")
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(account.user?.name ?? "").font(.headline)
-                        Text(account.user?.email ?? "").font(.caption).foregroundStyle(.secondary)
+        Form {
+            // Profil
+            Section {
+                HStack(spacing: 16) {
+                    Avatar(name: account.user?.name ?? "?", size: 60)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(account.user?.name ?? "").font(.title2.weight(.bold))
+                        Text(account.user?.email ?? "").foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Abmelden", role: .destructive) { account.logout() }.controlSize(.small)
+                    Button("Abmelden") { account.logout() }
                 }
-                .clanCard()
+                .padding(.vertical, 6)
+            }
 
-                // Clans
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Deine Clans").font(.title3.weight(.semibold))
-                    if account.clans.isEmpty {
-                        Text("Noch in keinem Clan. Leg unten einen an oder tritt mit einem Invite-Code bei.")
-                            .foregroundStyle(.secondary).clanCard()
-                    } else {
-                        ForEach(account.clans) { c in
-                            NavigationLink(value: c) { ClanRow(clan: c) }.buttonStyle(.plain)
-                        }
-                    }
+            Section("Deine Clans") {
+                if account.clans.isEmpty {
+                    Text("Noch in keinem Clan. Leg unten einen an oder tritt mit einem Invite-Code bei.")
+                        .foregroundStyle(.secondary)
                 }
+                ForEach(account.clans) { c in
+                    Button { openClan(c.id) } label: { ClanRow(clan: c) }
+                        .buttonStyle(.plain)
+                }
+            }
 
-                // Anlegen + Beitreten nebeneinander
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Neuer Clan", systemImage: "plus.circle.fill").font(.subheadline.weight(.semibold))
-                        TextField("Clan-Name", text: $newClan).textFieldStyle(.roundedBorder)
+            Section {
+                LabeledContent("Neuer Clan") {
+                    HStack {
+                        TextField("Neuer Clan", text: $newClan, prompt: Text("Clan-Name"))
+                            .labelsHidden()
+                            .frame(maxWidth: 220)
                         Button("Anlegen") {
                             Task { if let inv = await account.createClan(name: newClan) { note = "Clan angelegt. Invite-Code: \(inv)"; newClan = "" } }
                         }
                         .disabled(newClan.trimmingCharacters(in: .whitespaces).count < 2 || account.busy)
-                    }.clanCard()
-
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Clan beitreten", systemImage: "person.badge.plus").font(.subheadline.weight(.semibold))
-                        TextField("Invite-Code oder Link", text: $joinCode).textFieldStyle(.roundedBorder)
+                    }
+                }
+                LabeledContent("Clan beitreten") {
+                    HStack {
+                        TextField("Clan beitreten", text: $joinCode, prompt: Text("Invite-Code oder Link"))
+                            .labelsHidden()
+                            .frame(maxWidth: 220)
                         Button("Beitreten") {
                             Task {
                                 if await account.joinClan(code: joinCode) != nil { note = "Du bist jetzt im Clan."; joinCode = "" }
                             }
                         }
                         .disabled(joinCode.trimmingCharacters(in: .whitespaces).count < 4 || account.busy)
-                    }.clanCard()
+                    }
                 }
-
-                if let note { Text(note).font(.callout).foregroundStyle(.secondary) }
-                if let p = account.problem { Label(p, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.callout) }
-
-                // Datenschutz
-                HStack {
-                    Link("Datenschutzerklärung", destination: Account.privacyURL)
-                    Spacer()
-                    Button("Konto löschen …", role: .destructive) { password = ""; confirmDelete = true }
-                        .buttonStyle(.link).foregroundStyle(.red)
+            } footer: {
+                VStack(alignment: .leading, spacing: 4) {
+                    if let note { Text(note).foregroundStyle(.secondary) }
+                    if let p = account.problem { Label(p, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange) }
                 }
                 .font(.callout)
             }
-            .padding(24)
+
+            Section {
+                Link(destination: Account.privacyURL) {
+                    Label("Datenschutzerklärung", systemImage: "hand.raised.fill")
+                }
+                Button("Konto löschen …", role: .destructive) { password = ""; confirmDelete = true }
+                    .foregroundStyle(.red)
+            }
         }
+        .formStyle(.grouped)
+        .softScrollEdges()
         .task { await account.refreshMe() }
         .alert("Konto wirklich löschen?", isPresented: $confirmDelete) {
             SecureField("Passwort", text: $password)
@@ -229,16 +250,13 @@ private struct AccountHome: View {
     }
 }
 
-/// Eine Clan-Karte in der Liste.
+/// Eine Clan-Zeile in der Liste.
 struct ClanRow: View {
     let clan: ClanSummary
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: clan.isAdmin ? "crown.fill" : "person.3.fill")
-                .font(.title3)
-                .foregroundStyle(clan.isAdmin ? Color.orange : Color.secondary)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 3) {
+            ClanIcon(name: clan.name, key: clan.id, size: 34)
+            VStack(alignment: .leading, spacing: 2) {
                 Text(clan.name).font(.body.weight(.semibold))
                 Text("\(clan.members) \(clan.members == 1 ? "Mitglied" : "Mitglieder")").font(.caption).foregroundStyle(.secondary)
             }
@@ -246,6 +264,7 @@ struct ClanRow: View {
             Badge(text: clan.isAdmin ? "Admin" : "Mitglied", color: clan.isAdmin ? .orange : .secondary)
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .clanCard()
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
     }
 }
