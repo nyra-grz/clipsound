@@ -808,6 +808,9 @@ wss.on('connection', async (ws, req) => {
   ws.has = new Set();   // Dateien (sha256), die dieses Gerät gemeldet hat
   ws.clans = new Set();
   ws.sending = 0;
+  // Ohne diesen Handler beendet ein einzelner Verbindungsfehler (z. B. eine Nachricht über maxPayload) den ganzen Server.
+  // ws schließt die Verbindung danach selbst (1009), die close-Handler räumen auf.
+  ws.on('error', e => console.error('WS-Fehler', e.code || e.message));
   ws.on('pong', () => { ws.alive = true; });
   ws.on('close', () => dropRelays(ws));
 
