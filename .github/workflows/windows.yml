@@ -115,6 +115,8 @@ jobs:
             "Version der neuen exe: $((Get-Item upd\ClipSound.exe).VersionInfo.ProductVersion)"
           )
           $report | Tee-Object shots\update-test.txt
+          $err = Join-Path $env:TEMP 'clipsound-update-fehler.txt'
+          if (Test-Path $err) { Write-Host 'UPDATE-FEHLER:'; Get-Content $err | Tee-Object -Append shots\update-test.txt }
           if (-not $ok) {
             # Bildschirm fotografieren, um zu sehen, woran es hängt (z. B. ein Meldungsfenster)
             Add-Type -AssemblyName System.Windows.Forms, System.Drawing

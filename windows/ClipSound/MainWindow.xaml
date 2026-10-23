@@ -136,28 +136,30 @@
                 <StackPanel>
                     <TextBlock x:Name="HdrLibrary" Text="Bibliothek" Style="{StaticResource NavHeader}" Margin="18,2,0,4" Tag="wide"/>
                     <RadioButton x:Name="NavSounds" Style="{StaticResource NavItem}" Checked="Nav_Checked" ToolTip="Sounds">
-                        <DockPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <TextBlock Text="&#xE8D6;" Style="{StaticResource Glyph}" Width="20" Margin="0,0,14,0"/>
-                            <Border x:Name="SoundsBadge" DockPanel.Dock="Right" Style="{StaticResource NavBadge}" Tag="wide">
+                            <TextBlock Grid.Column="1" Text="Sounds" VerticalAlignment="Center" Tag="wide"/>
+                            <Border x:Name="SoundsBadge" Grid.Column="2" Style="{StaticResource NavBadge}" Tag="wide">
                                 <TextBlock x:Name="SoundsBadgeText" Text="0" HorizontalAlignment="Center"/>
                             </Border>
-                            <TextBlock Text="Sounds" VerticalAlignment="Center" Tag="wide"/>
-                        </DockPanel>
+                        </Grid>
                     </RadioButton>
 
                     <TextBlock x:Name="HdrTogether" Text="Zusammen" Style="{StaticResource NavHeader}" Tag="wide"/>
                     <RadioButton x:Name="NavLobby" Style="{StaticResource NavItem}" Checked="Nav_Checked" ToolTip="Lobby">
-                        <DockPanel>
+                        <Grid>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <Grid Width="20" Margin="0,0,14,0">
                                 <TextBlock Text="&#xE716;" Style="{StaticResource Glyph}"/>
                                 <Ellipse x:Name="LobbyNavDot" Width="7" Height="7" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                          Margin="0,0,-2,6" Visibility="Collapsed" Fill="{DynamicResource SystemFillColorSuccessBrush}"/>
                             </Grid>
-                            <Border x:Name="LobbyBadge" DockPanel.Dock="Right" Style="{StaticResource NavBadge}" Visibility="Collapsed" Tag="wide">
+                            <TextBlock Grid.Column="1" Text="Lobby" VerticalAlignment="Center" Tag="wide"/>
+                            <Border x:Name="LobbyBadge" Grid.Column="2" Style="{StaticResource NavBadge}" Visibility="Collapsed" Tag="wide">
                                 <TextBlock x:Name="LobbyBadgeText" FontFamily="{StaticResource MonoFont}"/>
                             </Border>
-                            <TextBlock Text="Lobby" VerticalAlignment="Center" Tag="wide"/>
-                        </DockPanel>
+                        </Grid>
                     </RadioButton>
 
                     <TextBlock x:Name="HdrClans" Text="Clans" Style="{StaticResource NavHeader}" Tag="wide"/>
@@ -179,20 +181,22 @@
             <StackPanel Grid.Row="3" Margin="0,4,0,6">
                 <RadioButton x:Name="NavAccount" Style="{StaticResource NavItem}" Checked="Nav_Checked" MinHeight="52" Padding="10,0,12,0"
                              ToolTip="Konto &amp; Clans">
-                    <DockPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <ContentControl x:Name="AccountAvatarHost" Width="32" Height="32" Margin="0,0,10,0" Focusable="False"/>
-                        <StackPanel VerticalAlignment="Center" Tag="wide">
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Tag="wide">
                             <TextBlock x:Name="AccountName" Text="Anmelden" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                             <TextBlock x:Name="AccountSub" Text="Für Clans mit Freunden" Style="{StaticResource Caption}"
                                        TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
-                    </DockPanel>
+                    </Grid>
                 </RadioButton>
                 <RadioButton x:Name="NavSettings" Style="{StaticResource NavItem}" Checked="Nav_Checked" ToolTip="Einstellungen (Strg+,)">
-                    <DockPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                         <TextBlock Text="&#xE713;" Style="{StaticResource Glyph}" Width="20" Margin="0,0,14,0"/>
-                        <TextBlock Text="Einstellungen" VerticalAlignment="Center" Tag="wide"/>
-                    </DockPanel>
+                        <TextBlock Grid.Column="1" Text="Einstellungen" VerticalAlignment="Center" Tag="wide"/>
+                    </Grid>
                 </RadioButton>
             </StackPanel>
         </Grid>

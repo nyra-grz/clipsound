@@ -280,7 +280,10 @@ public partial class MainWindow : Window
             var icon = Ui.ClanIcon(c.Name, c.Id, 20);
             icon.Margin = new Thickness(0, 0, 14, 0);
             var name = new TextBlock { Text = c.Name, VerticalAlignment = VerticalAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis, Tag = "wide" };
-            var item = new RadioButton { Tag = c.Id, ToolTip = c.Name, Content = new DockPanel { Children = { icon, name } } };
+            Grid.SetColumn(name, 1);
+            // Auto-Spalte fürs Zeichen: in der schmalen Leiste abgeschnitten statt gestaucht
+            var content = new Grid { ColumnDefinitions = { new() { Width = GridLength.Auto }, new() }, Children = { icon, name } };
+            var item = new RadioButton { Tag = c.Id, ToolTip = c.Name, Content = content };
             item.SetResourceReference(StyleProperty, "NavItem");
             item.IsChecked = _section == Section.Clan && _clanId == c.Id;
             item.Checked += Nav_Checked;
@@ -309,9 +312,13 @@ public partial class MainWindow : Window
         ApplyPaneLabels();
     }
 
-    /// <summary>Texte, Zahlen und Überschriften (Tag="wide") nur in der breiten Leiste</summary>
+    /// <summary>Texte, Zahlen und Überschriften (Tag="wide") nur in der breiten Leiste; schmal steht das Symbol mittig</summary>
     private void ApplyPaneLabels()
     {
+        foreach (var item in ClanNav.Children.OfType<RadioButton>().Append(NavSounds).Append(NavLobby).Append(NavSettings))
+            item.Padding = _paneCompact ? new Thickness(10, 0, 0, 0) : new Thickness(14, 0, 12, 0);
+        NavAccount.Padding = _paneCompact ? new Thickness(4, 0, 0, 0) : new Thickness(10, 0, 12, 0);
+        AddClanBtn.Padding = _paneCompact ? new Thickness(10, 0, 0, 0) : new Thickness(14, 0, 12, 0);
         void Walk(object node)
         {
             if (node is FrameworkElement { Tag: "wide" } el) el.Visibility = _paneCompact ? Visibility.Collapsed : Visibility.Visible;
@@ -1360,6 +1367,8 @@ public partial class MainWindow : Window
             UpdateButtons.Visibility = Visibility.Visible;
             UpdateProgressBar.Visibility = Visibility.Collapsed;
             UpdateSubtitle.Text = $"Du hast {Updater.CurrentVersion}.";
+            // Testlauf: Grund festhalten (die Meldung kann hinter einer anderen warten)
+            if (HasArg("--update-now")) try { File.WriteAllText(Path.Combine(Path.GetTempPath(), "clipsound-update-fehler.txt"), ex.ToString()); } catch { }
             ShowError("Update fehlgeschlagen: " + ex.Message);
         }
     }
@@ -1441,8 +1450,10 @@ public partial class MainWindow : Window
         var selftest = Arg("--selftest");
         if (HasArg("--play-first") && _tiles.Count > 0)
         {
-            // fürs Bild: zwei Sounds gleichzeitig, damit die Leiste „+1“ zeigt
+            // fürs Bild: zwei Sounds gleichzeitig, damit die Leiste „+1“ zeigt (ohne die Einstellung zu ändern)
+            _loading = true;
             Overlap.IsChecked = true;
+            _loading = false;
             foreach (var t in _tiles.Take(2).Reverse()) Play(t);
         }
         if (snapshot is null && selftest is null && !HasArg("--recorder")) return;
