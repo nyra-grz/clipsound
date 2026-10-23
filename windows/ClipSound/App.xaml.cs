@@ -29,6 +29,10 @@ public partial class App : Application
             args.Handled = true;
         };
         base.OnStartup(e);
+        // Zum Testen: --theme dark|light statt der Windows-Einstellung
+        if (e.Args.SkipWhile(a => a != "--theme").Skip(1).FirstOrDefault() is { } theme)
+            ThemeMode = theme == "dark" ? ThemeMode.Dark : ThemeMode.Light;
+        Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/Styles.xaml") });
 
         // Testläufe dürfen mehrere Instanzen haben
         if (!ClipSound.MainWindow.TestMode && !TakeInstance(e.Args))

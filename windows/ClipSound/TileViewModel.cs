@@ -8,23 +8,15 @@ namespace ClipSound;
 
 public sealed class TileViewModel : INotifyPropertyChanged
 {
-    // Feste Farbe pro Sound (wie die Systemfarben in der Mac-Version)
-    private static readonly Color[] Tints =
-    {
-        Color.FromRgb(0x00, 0x78, 0xD4), Color.FromRgb(0x88, 0x64, 0xD9), Color.FromRgb(0xE3, 0x00, 0x8C), Color.FromRgb(0xF7, 0x63, 0x0C),
-        Color.FromRgb(0x10, 0x89, 0x3E), Color.FromRgb(0x00, 0x99, 0xBC), Color.FromRgb(0x5C, 0x2E, 0x91), Color.FromRgb(0xD1, 0x34, 0x38),
-    };
-
     /// <param name="lobby">Sound des Hosts, wenn man als Gast in einer Lobby ist</param>
     public TileViewModel(Sound sound, LobbySound? lobby = null)
     {
         Sound = sound;
         Lobby = lobby;
-        uint h = 0;
-        // Farbe nach dem Originalnamen, damit Host und Gast dieselbe sehen
-        foreach (char c in lobby?.Name ?? sound.FileName) unchecked { h = h * 31 + c; }
-        Tint = new SolidColorBrush(Tints[h % (uint)Tints.Length]);
-        Tint.Freeze();
+        // Farbe nach dem Originalnamen, damit Host und Gast dieselbe sehen (und gleich wie am Mac)
+        Color = Palette.For(lobby?.Name ?? sound.FileName);
+        Tint = Palette.Solid(Color);
+        TileBrush = Palette.Tile(Color);
     }
 
     public Sound Sound { get; }
@@ -33,7 +25,11 @@ public sealed class TileViewModel : INotifyPropertyChanged
     /// <summary>Gast: Datei wird noch geladen</summary>
     public bool IsLoading => Lobby is not null && Lobby.Local is null;
     public string FileName => Sound.FileName;
+    public Color Color { get; }
     public Brush Tint { get; }
+    /// <summary>Hintergrund der Kachel (Farbverlauf)</summary>
+    public Brush TileBrush { get; }
+    public bool IsLobby => Lobby is not null;
 
     private KeyBind? _bind;
     public KeyBind? Bind
@@ -74,8 +70,14 @@ public sealed class TileViewModel : INotifyPropertyChanged
 /// </summary>
 public sealed class TileGrid : Panel
 {
-    public double MinTileWidth { get; set; } = 180;
-    public double TileHeight { get; set; } = 86;
+    public static readonly DependencyProperty MinTileWidthProperty = DependencyProperty.Register(
+        nameof(MinTileWidth), typeof(double), typeof(TileGrid), new FrameworkPropertyMetadata(180.0, FrameworkPropertyMetadataOptions.AffectsMeasure));
+    public static readonly DependencyProperty TileHeightProperty = DependencyProperty.Register(
+        nameof(TileHeight), typeof(double), typeof(TileGrid), new FrameworkPropertyMetadata(86.0, FrameworkPropertyMetadataOptions.AffectsMeasure));
+
+    /// <summary>Kachelgröße kommt als DynamicResource und ändert sich mit „Darstellung“</summary>
+    public double MinTileWidth { get => (double)GetValue(MinTileWidthProperty); set => SetValue(MinTileWidthProperty, value); }
+    public double TileHeight { get => (double)GetValue(TileHeightProperty); set => SetValue(TileHeightProperty, value); }
     public double Spacing { get; set; } = 8;
 
     private int Columns(double width) =>
@@ -107,7 +109,7 @@ public sealed class TileGrid : Panel
     }
 }
 
-/// <summary>Fortschrittsbalken (0…1) in der Kachelfarbe.</summary>
+/// <summary>Fortschrittsbalken (0…1), z. B. weiß auf der Kachel oder in der Kachelfarbe in der Wiedergabeleiste.</summary>
 public sealed class ProgressLine : FrameworkElement
 {
     public static readonly DependencyProperty ProgressProperty = DependencyProperty.Register(
@@ -118,11 +120,18 @@ public sealed class ProgressLine : FrameworkElement
         nameof(Fill), typeof(Brush), typeof(ProgressLine),
         new FrameworkPropertyMetadata(Brushes.DodgerBlue, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty TrackProperty = DependencyProperty.Register(
+        nameof(Track), typeof(Brush), typeof(ProgressLine),
+        new FrameworkPropertyMetadata(null, FrameworkPropertyMetadataOptions.AffectsRender));
+
     public double Progress { get => (double)GetValue(ProgressProperty); set => SetValue(ProgressProperty, value); }
     public Brush Fill { get => (Brush)GetValue(FillProperty); set => SetValue(FillProperty, value); }
+    /// <summary>Hintergrund der ganzen Linie (leer = keiner)</summary>
+    public Brush? Track { get => (Brush?)GetValue(TrackProperty); set => SetValue(TrackProperty, value); }
 
     protected override void OnRender(DrawingContext dc)
     {
+        if (Track is not null) dc.DrawRoundedRectangle(Track, null, new Rect(0, 0, ActualWidth, ActualHeight), ActualHeight / 2, ActualHeight / 2);
         double w = Math.Max(ActualHeight, ActualWidth * Math.Clamp(Progress, 0, 1));
         dc.DrawRoundedRectangle(Fill, null, new Rect(0, 0, w, ActualHeight), ActualHeight / 2, ActualHeight / 2);
     }

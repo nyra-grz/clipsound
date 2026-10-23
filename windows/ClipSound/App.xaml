@@ -2,8 +2,5 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              ThemeMode="System">
-    <Application.Resources>
-        <!-- Windows-11-Symbole (Windows 10: MDL2) -->
-        <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
-    </Application.Resources>
+    <!-- Styles.xaml kommt in OnStartup dazu (nach dem Fluent-Theme, das ThemeMode einhängt) -->
 </Application>

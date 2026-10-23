@@ -68,10 +68,31 @@ jobs:
           Run @('--library', "$pwd\empty\Sounds", '--snapshot', "$pwd\shots\4-leer.png")
           Run @('--library', "$pwd\testlib\Sounds", '--pretend-version', '1.0', '--snapshot', "$pwd\shots\5-update.png")
           Run @('--library', "$pwd\testlib\Sounds", '--settings', '--snapshot', "$pwd\shots\7-einstellungen.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--theme', 'dark', '--snapshot', "$pwd\shots\1b-dunkel.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--theme', 'dark', '--play-first', '--snapshot', "$pwd\shots\1c-spielt.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--theme', 'dark', '--recorder', '--snapshot', "$pwd\shots\3b-taste-dunkel.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--page', 'lobby', '--snapshot', "$pwd\shots\9-lobby.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--page', 'lobby', '--theme', 'dark', '--lobby-host', '--snapshot-delay', '8', '--snapshot', "$pwd\shots\9b-lobby-offen.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--page', 'account', '--snapshot', "$pwd\shots\10-konto.png")
+          Run @('--library', "$pwd\testlib\Sounds", '--page', 'settings', '--theme', 'dark', '--snapshot', "$pwd\shots\7b-einstellungen-dunkel.png")
           Run @('--library', "$pwd\testlib\Sounds", '--icon', "$pwd\shots\4-leer.png", '--settings', '--snapshot', "$pwd\shots\8-eigenes-icon.png")
           Remove-Item "$env:APPDATA\ClipSound\AppIcon.png" -ErrorAction SilentlyContinue
           Get-ChildItem shots
           Get-ChildItem shots -Filter *.txt | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content $_.FullName }
+
+      - name: Echtes Fenster fotografieren (Titelleiste, Mica)
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $p = Start-Process "$pwd\out\ClipSound.exe" -ArgumentList '--library', "$pwd\testlib\Sounds", '--size', '1000x680' -PassThru
+          Start-Sleep 8
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$pwd\shots\0-bildschirm.png")
+          $p | Stop-Process -Force -ErrorAction SilentlyContinue
+          $crash = Join-Path $env:TEMP 'clipsound-crash.txt'
+          if (Test-Path $crash) { Write-Host 'ABSTURZ:'; Get-Content $crash }
 
       - name: Update testen (tut so, als wäre 1.0 installiert)
         shell: pwsh

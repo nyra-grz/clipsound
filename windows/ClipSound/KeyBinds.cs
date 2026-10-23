@@ -43,6 +43,18 @@ public sealed record KeyBind(int Vk, int Mods, string Label)
         }
     }
 
+    /// <summary>Einzelne Tasten (für die Tastenkappen im Aufnahme-Dialog)</summary>
+    public IEnumerable<string> Parts
+    {
+        get
+        {
+            if ((Mods & Ctrl) != 0) yield return "Strg";
+            if ((Mods & Alt) != 0) yield return "Alt";
+            if ((Mods & Shift) != 0) yield return "Umschalt";
+            yield return Label;
+        }
+    }
+
     public static int ModsFrom(ModifierKeys keys) =>
         (keys.HasFlag(ModifierKeys.Control) ? Ctrl : 0) |
         (keys.HasFlag(ModifierKeys.Alt) ? Alt : 0) |
