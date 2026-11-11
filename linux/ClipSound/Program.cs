@@ -29,7 +29,7 @@ internal static class Program
             var assets = Path.Combine(AppContext.BaseDirectory, "Assets", "icons");
             if (Gdk.Display.GetDefault() is { } display && Directory.Exists(assets))
                 Gtk.IconTheme.GetForDisplay(display).AddSearchPath(assets);
-            Gtk.Window.SetDefaultIconName("clipsound");
+            Gtk.Window.SetDefaultIconName(CustomIcon.DefaultName); // eigenes Icon setzt das Hauptfenster gleich danach
         };
         app.OnActivate += (_, _) =>
         {

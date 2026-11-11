@@ -8,6 +8,7 @@ namespace ClipSound;
 //   --snapshot <png>     Fenster als Bild speichern und beenden  --selftest <txt> Wiedergabe/Tasten prüfen, Bericht schreiben
 //   --import-test <ord>  (mit --selftest) Dateien importieren    --recorder      Aufnahme-Dialog für den ersten Sound öffnen
 //   --settings / --account / --lobby / --about   Dialog öffnen (mit --snapshot: davon das Bild)
+//   --icon <bild>        eigenes App-Icon setzen (wie in den Einstellungen)
 //   --pretend-version <v> so tun, als wäre Version <v> installiert   --update-now   verfügbares Update gleich installieren
 //   --lobby-host / --lobby-join <code> / --lobby-accept / --lobby-play-first / --lobby-log <txt> / --lobby-exit-after <s>
 //   --hotkey-test <txt>  Alt+2 auf den ersten Sound legen, 15 s auf den systemweiten Kürzel warten, Ergebnis schreiben
@@ -67,7 +68,9 @@ public sealed class MainWindow
 
         Window = Adw.ApplicationWindow.New(app);
         Window.SetTitle("ClipSound");
-        Window.SetIconName("clipsound");
+        if (Gdk.Display.GetDefault() is { } display) CustomIcon.Startup(display, _library.SettingsFolder);
+        Window.SetIconName(CustomIcon.IconName);
+        CustomIcon.Changed += () => Window.SetIconName(CustomIcon.IconName);
         int width = 1000, height = 680;
         if (Arg("--size")?.Split('x') is [var w, var h]) { width = int.Parse(w); height = int.Parse(h); }
         Window.SetDefaultSize(width, height);
@@ -485,25 +488,33 @@ public sealed class MainWindow
         drop.OnDrop += (_, e) =>
         {
             _stack.RemoveCssClass("drop-target");
-            var paths = new List<string>();
-            try
-            {
-                var list = gdk_file_list_get_files(e.Value.GetBoxed());
-                for (var node = list; node != IntPtr.Zero; node = Marshal.ReadIntPtr(node, IntPtr.Size))
-                {
-                    var path = g_file_get_path(Marshal.ReadIntPtr(node));
-                    if (path == IntPtr.Zero) continue;
-                    paths.Add(Marshal.PtrToStringUTF8(path)!);
-                    g_free(path);
-                }
-                g_slist_free(list);
-            }
-            catch { return false; }
+            var paths = DroppedPaths(e.Value);
             if (InGuestLobby || paths.Count == 0) return false;
             Import(paths);
             return true;
         };
         _stack.AddController(drop);
+    }
+
+    /// <summary>Pfade der hineingezogenen Dateien (Wert eines DropTarget für Gdk.FileList)</summary>
+    public static List<string> DroppedPaths(GObject.Value value)
+    {
+        NativeNames.Install();
+        var paths = new List<string>();
+        try
+        {
+            var list = gdk_file_list_get_files(value.GetBoxed());
+            for (var node = list; node != IntPtr.Zero; node = Marshal.ReadIntPtr(node, IntPtr.Size))
+            {
+                var path = g_file_get_path(Marshal.ReadIntPtr(node));
+                if (path == IntPtr.Zero) continue;
+                paths.Add(Marshal.PtrToStringUTF8(path)!);
+                g_free(path);
+            }
+            g_slist_free(list);
+        }
+        catch { paths.Clear(); }
+        return paths;
     }
 
     // ---------- Kontextmenü ----------
@@ -728,7 +739,7 @@ public sealed class MainWindow
     {
         var about = Adw.AboutDialog.New();
         about.SetApplicationName("ClipSound");
-        about.SetApplicationIcon("clipsound");
+        about.SetApplicationIcon(CustomIcon.IconName);
         about.SetVersion(Updater.CurrentVersion);
         about.SetDeveloperName("Daniel Özdek");
         about.SetComments("Meme-Sounds per Klick oder Taste – bis 500 %, zusammen in Lobbys und Clans mit Windows, Mac, iPhone und Browser.");
@@ -875,6 +886,7 @@ public sealed class MainWindow
                 return false;
             });
         }
+        if (Arg("--icon") is { } icon && !CustomIcon.Set(icon)) _testErrors.Add("--icon: kein lesbares Bild");
         if (HasArg("--settings")) OpenSettings();
         if (HasArg("--account") || HasArg("--open-clan")) OpenAccount();
         if (HasArg("--lobby")) OpenLobby();

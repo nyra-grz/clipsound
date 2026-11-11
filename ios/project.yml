@@ -23,6 +23,10 @@ targets:
       - path: ../macos/Sources/ClipSound/Account.swift
       # Sounds von Gerät zu Gerät (der Server speichert keine Dateien)
       - path: ../macos/Sources/ClipSound/Share.swift
+      # App-Icon wie am Mac (Icon Composer, Liquid Glass ab iOS 26)
+      - path: ../macos/Resources/AppIcon.icon
+        type: file
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: at.timur.ClipSound
@@ -38,6 +42,8 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # Nur hinzufügen: das eigene App-Icon für die Kurzbefehle-App in Fotos sichern
+        NSPhotoLibraryAddUsageDescription: Damit ClipSound dein eigenes App-Icon in Fotos sichern kann – für ein Symbol auf dem Home-Bildschirm über die Kurzbefehle-App.
         # Sound-Ordner in der Dateien-App sichtbar („Auf meinem iPhone › ClipSound“)
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true

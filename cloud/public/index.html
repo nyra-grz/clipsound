@@ -35,6 +35,9 @@
     background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
     box-shadow: 0 6px 20px rgba(255,95,109,.35);
   }
+  button.logo { border: 0; padding: 0; cursor: pointer; color: inherit; font-family: inherit; }
+  .logo.own { background: var(--panel); box-shadow: none; overflow: hidden; }
+  .logo img { width: 100%; height: 100%; object-fit: cover; display: block; }
   h1 { font-size: 18px; margin: 0; letter-spacing: -.02em; line-height: 1.1; white-space: nowrap; }
   .count { color: var(--muted); font-size: 12px; font-weight: 500; }
 
@@ -215,6 +218,10 @@
   .ask .row { justify-content: flex-end; }
   .ask .list { display: flex; flex-direction: column; gap: 6px; }
   .ask .list .btn { justify-content: flex-start; }
+  .ask .head { display: flex; align-items: center; gap: 14px; }
+  .ask .head .logo { flex: none; width: 56px; height: 56px; border-radius: 15px; font-size: 26px; }
+  .ask .head div { display: flex; flex-direction: column; gap: 4px; }
+  .ask .row .left { margin-right: auto; }
   .role { font-size: 12px; color: var(--muted); }
   .role a, .hint a { color: var(--muted); }
 </style>
@@ -223,7 +230,7 @@
 
 <!-- Lobby öffnen oder beitreten -->
 <section class="lobby" id="lobby">
-  <div class="brand"><div class="logo">🔊</div><div><h1>ClipSound Lobby</h1><div class="count">Ein Board, alle hören gleichzeitig</div></div></div>
+  <div class="brand"><button class="logo" type="button" title="Eigenes Logo wählen">🔊</button><div><h1>ClipSound Lobby</h1><div class="count">Ein Board, alle hören gleichzeitig</div></div></div>
   <div class="card">
     <label for="nameIn">Dein Name</label>
     <input class="field" id="nameIn" maxlength="24" placeholder="z. B. Daniel" autocomplete="nickname">
@@ -245,7 +252,7 @@
 <div id="room" hidden>
 <header>
   <div class="brand">
-    <div class="logo">🔊</div>
+    <button class="logo" type="button" title="Eigenes Logo wählen">🔊</button>
     <div><h1 id="roomTitle">ClipSound</h1><div class="count" id="count"></div></div>
   </div>
   <div class="roominfo" title="Code oder Link teilen">
@@ -296,6 +303,7 @@
 <div class="unlock" id="unlock" hidden><button class="btn btn-upload" id="unlockBtn">🔊 Tippen zum Mithören</button></div>
 <div class="ask" id="ask" hidden></div>
 <div class="toast" id="toast"></div>
+<input type="file" id="logoFile" accept="image/*" hidden>
 
 <script>
 // Spricht dasselbe Protokoll wie die Apps (siehe cloud/server.js)
@@ -559,6 +567,58 @@ function gradientFor(name) {
   return GRADIENTS[h % GRADIENTS.length];
 }
 
+// ---------- Eigenes Logo (wie das App-Icon in den Apps – bleibt nur in diesem Browser) ----------
+const DEFAULT_LOGO = '🔊';
+
+function applyLogo() {
+  const url = store.get('logo');
+  document.querySelectorAll('.logo').forEach(el => {
+    el.classList.toggle('own', !!url);
+    if (url) { const img = new Image(); img.src = url; img.alt = ''; el.replaceChildren(img); }
+    else el.textContent = DEFAULT_LOGO;
+  });
+  // Tab-Symbol und Symbol für „Zum Home-Bildschirm“
+  for (const rel of ['icon', 'apple-touch-icon']) {
+    let link = document.querySelector(`link[rel="${rel}"]`);
+    if (!url) { link?.remove(); continue; }
+    if (!link) { link = document.createElement('link'); link.rel = rel; document.head.append(link); }
+    link.href = url;
+  }
+}
+
+async function setLogo(file) {
+  if (!file?.type.startsWith('image/')) return toast('Das ist kein Bild', true);
+  let url;
+  try {
+    const bmp = await createImageBitmap(file); // Handyfotos kommen dabei richtig herum
+    const side = Math.min(bmp.width, bmp.height), size = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = size;
+    const g = c.getContext('2d');
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, 0, 0, size, size); // mittig quadratisch
+    url = c.toDataURL('image/png');
+  } catch { return toast('Das Bild konnte nicht gelesen werden', true); }
+  store.set('logo', url);
+  if (store.get('logo') !== url) return toast('Der Browser lässt kein Logo speichern', true);
+  applyLogo();
+  logoDialog();
+}
+
+function logoDialog() {
+  const box = $('ask'), own = !!store.get('logo');
+  box.innerHTML = `<div class="head"><span class="logo"></span><div><b>${own ? 'Eigenes Logo' : 'Standard-Logo'}</b>
+    <p>Ein Bild wählen, es wird quadratisch zugeschnitten. Gilt auch fürs Tab-Symbol und bleibt nur in diesem Browser.</p></div></div>
+    <div class="row">${own ? '<button class="btn left" data-a="reset">Standard</button>' : ''}
+    <button class="btn" data-a="close">Fertig</button><button class="btn btn-upload" data-a="pick">Bild wählen …</button></div>`;
+  applyLogo();
+  box.querySelector('[data-a="pick"]').onclick = () => $('logoFile').click();
+  box.querySelector('[data-a="close"]').onclick = () => { box.hidden = true; showAsk(); };
+  const reset = box.querySelector('[data-a="reset"]');
+  if (reset) reset.onclick = () => { store.set('logo', null); applyLogo(); logoDialog(); };
+  box.hidden = false;
+}
+
 function toast(msg, err) {
   const t = $('toast');
   t.textContent = msg; t.className = 'toast show' + (err ? ' err' : '');
@@ -678,6 +738,9 @@ $('leaveBtn').onclick = leave;
 $('uploadBtn').onclick = () => $('file').click();
 $('file').onchange = e => { addSounds(e.target.files); e.target.value = ''; };
 $('stopBtn').onclick = stopAll;
+document.querySelectorAll('button.logo').forEach(b => b.onclick = logoDialog);
+$('logoFile').onchange = e => { setLogo(e.target.files[0]); e.target.value = ''; };
+applyLogo();
 search.oninput = render;
 
 let dragDepth = 0;

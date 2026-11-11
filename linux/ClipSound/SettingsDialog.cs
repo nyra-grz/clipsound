@@ -1,6 +1,6 @@
 namespace ClipSound;
 
-/// <summary>Einstellungen als libadwaita-Einstellungsfenster: Fenster, Sounds/Ton, Tastenkürzel, Datenschutz.</summary>
+/// <summary>Einstellungen als libadwaita-Einstellungsfenster: Fenster, App-Icon, Sounds/Ton, Tastenkürzel, Datenschutz.</summary>
 public static class SettingsDialog
 {
     public static void Show(Gtk.Widget parent, Settings settings, SoundLibrary library, SoundPlayer player, GlobalHotKeys hotKeys, Action backgroundChanged)
@@ -23,6 +23,7 @@ public static class SettingsDialog
             backgroundChanged();
         };
         page.Add(Ui.Group("Fenster", null, keep));
+        page.Add(IconGroup(parent, dialog));
 
         var folder = Ui.Row("Sound-Ordner", library.Folder, library.Reveal);
         folder.SetSubtitleSelectable(true);
@@ -46,5 +47,71 @@ public static class SettingsDialog
 
         dialog.Add(page);
         dialog.Present(parent);
+    }
+
+    /// <summary>Eigenes App-Icon wählen (Dateiauswahl oder Bild auf die Zeile ziehen) oder zurück zum Standard</summary>
+    private static Adw.PreferencesGroup IconGroup(Gtk.Widget parent, Adw.PreferencesDialog dialog)
+    {
+        var row = Adw.ActionRow.New();
+        var preview = CustomIcon.Preview(48);
+        preview.SetMarginTop(8);
+        preview.SetMarginBottom(8);
+        row.AddPrefix(preview);
+
+        void Use(string path)
+        {
+            if (!CustomIcon.Set(path)) dialog.AddToast(Adw.Toast.New("Das ist kein Bild, das ClipSound lesen kann (PNG, JPG, WebP, GIF …)."));
+        }
+
+        async Task ChooseAsync()
+        {
+            var files = Gtk.FileDialog.New();
+            files.SetTitle("Bild für das ClipSound-Icon");
+            var filter = Gtk.FileFilter.New();
+            filter.SetName("Bilder");
+            filter.AddPixbufFormats();
+            var filters = Gio.ListStore.New(Gtk.FileFilter.GetGType());
+            filters.Append(filter);
+            files.SetFilters(filters);
+            files.SetDefaultFilter(filter);
+            try
+            {
+                var file = await files.OpenAsync(parent.GetRoot() as Gtk.Window);
+                if (file?.GetPath() is { } path) Use(path);
+            }
+            catch { /* abgebrochen */ }
+        }
+
+        var reset = Ui.IconButton("user-trash-symbolic", "Eigenes Icon entfernen", CustomIcon.Reset, "flat");
+        var choose = Ui.Button("Bild auswählen …", () => _ = ChooseAsync());
+        reset.SetValign(Gtk.Align.Center);
+        choose.SetValign(Gtk.Align.Center);
+        row.AddSuffix(reset);
+        row.AddSuffix(choose);
+
+        void Update()
+        {
+            row.SetTitle(CustomIcon.IsSet ? "Eigenes Icon" : "Standard-Icon");
+            preview.SetFromIconName(CustomIcon.IconName);
+            reset.SetVisible(CustomIcon.IsSet);
+        }
+        Update();
+        CustomIcon.Changed += Update;
+        dialog.OnClosed += (_, _) => CustomIcon.Changed -= Update;
+
+        // Bild auf die Zeile ziehen
+        var drop = Gtk.DropTarget.New(Gdk.FileList.GetGType(), Gdk.DragAction.Copy);
+        drop.OnDrop += (_, e) =>
+        {
+            var paths = MainWindow.DroppedPaths(e.Value);
+            if (paths.Count == 0) return false;
+            Use(paths[0]);
+            return true;
+        };
+        row.AddController(drop);
+
+        return Ui.Group("App-Icon",
+            "Gilt für das Fenster und – wenn ClipSound mit install.sh installiert ist – für App-Menü und Dock. Bild hier hineinziehen geht auch.",
+            row);
     }
 }

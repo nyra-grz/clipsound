@@ -7,6 +7,7 @@ struct ContentView: View {
     @ObservedObject var lobby: Lobby
     @State private var showLobby = false
     @State private var showAccount = false
+    @State private var showSettings = false
     @ObservedObject private var account = Account.shared
 
     @State private var query = ""
@@ -70,6 +71,9 @@ struct ContentView: View {
                     Button("Alles stoppen", systemImage: "stop.fill", action: stopAll)
                         .disabled(player.progress.isEmpty && !lobby.active)
                 }
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Einstellungen", systemImage: "gearshape") { showSettings = true }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Lobby", systemImage: lobby.active ? "person.2.fill" : "person.2") { showLobby = true }
                 }
@@ -109,6 +113,7 @@ struct ContentView: View {
         } message: { Text($0) }
         .sheet(isPresented: $showLobby) { LobbySheet(lobby: lobby, library: library) }
         .sheet(isPresented: $showAccount) { AccountSheet(account: account, lobby: lobby, library: library) }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
         .alert(requestTitle, isPresented: requestShown, presenting: lobby.requests.first) { request in
             Button(request.kind == .asked ? "Erlauben" : "Annehmen") { lobby.answer(request, ok: true) }
             Button("Ablehnen", role: .cancel) { lobby.answer(request, ok: false) }
@@ -122,6 +127,7 @@ struct ContentView: View {
         } message: { Text($0) }
         .sensoryFeedback(.impact(weight: .light), trigger: tapCount)
         .onAppear { if ProcessInfo.processInfo.arguments.contains("--open-account") { showAccount = true } }
+        .onAppear { if ProcessInfo.processInfo.arguments.contains("--open-settings") { showSettings = true } }
         .onAppear { account.attach(library) } // Clan-Sounds von diesem iPhone aus weitergeben
     }
 

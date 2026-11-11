@@ -38,8 +38,11 @@ struct ClipSoundApp: App {
         // das macht der System-Regler/die Lautstärke-Tasten). Andere Geräte kann man trotzdem regeln.
         lobby.systemVolume = (get: { Double(AVAudioSession.sharedInstance().outputVolume) },
                               set: { _ in false })
-        // Testen im Simulator: --lobby-join CODE bzw. --lobby-host
+        // Testen im Simulator: --lobby-join CODE bzw. --lobby-host, --icon <bild> setzt das eigene App-Icon
         let args = ProcessInfo.processInfo.arguments
+        if let i = args.firstIndex(of: "--icon"), i + 1 < args.count, let data = FileManager.default.contents(atPath: args[i + 1]) {
+            CustomIcon.shared.set(data)
+        }
         if let i = args.firstIndex(of: "--lobby-join"), i + 1 < args.count {
             lobby.join(args[i + 1])
         } else if args.contains("--lobby-host") {

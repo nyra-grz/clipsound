@@ -118,6 +118,22 @@ jobs:
           test -x "$D/clipsound/ClipSound" && test -d "$D/clipsound/Assets/icons" && test -f "$D/icons/hicolor/512x512/apps/clipsound.png"
           timeout 60 "$HOME/.local/bin/clipsound" --library testlib/Sounds --snapshot shots/9-installiert.png > shots/log-installiert.txt 2>&1
           test -s shots/9-installiert.png
+
+          # Eigenes App-Icon: zuschneiden, Fenster/Einstellungen, App-Menü-Eintrag (XDG_DATA_HOME gesetzt = Testlauf darf ihn ändern)
+          ffmpeg -loglevel error -f lavfi -i "color=c=0x5a28aa:s=640x400" -frames:v 1 shots/testlogo.png
+          XDG_DATA_HOME="$D" timeout 60 "$HOME/.local/bin/clipsound" --library testlib/Sounds --icon shots/testlogo.png --settings --snapshot shots/10-eigenes-icon.png > shots/log-icon.txt 2>&1
+          test -s shots/10-eigenes-icon.png
+          python3 -c "import struct,sys; w,h=struct.unpack('>II',open('testlib/AppIcon.png','rb').read()[16:24]); print('AppIcon.png', w, h); sys.exit(0 if (w,h)==(256,256) else 1)"
+          grep Icon= "$D/applications/at.timur.ClipSound.desktop"
+          grep -q "^Icon=$PWD/testlib/icons/clipsound-eigen-.*\.png$" "$D/applications/at.timur.ClipSound.desktop"
+          test -s "$(sed -n 's/^Icon=//p' "$D/applications/at.timur.ClipSound.desktop")"
+          desktop-file-validate "$D/applications/at.timur.ClipSound.desktop"
+          # Zurücksetzen: ohne AppIcon.png stellt der nächste Start den Standard wieder her
+          rm testlib/AppIcon.png
+          XDG_DATA_HOME="$D" timeout 60 "$HOME/.local/bin/clipsound" --library testlib/Sounds --snapshot shots/11-icon-zurueck.png > shots/log-icon-zurueck.txt 2>&1
+          grep -q "^Icon=clipsound$" "$D/applications/at.timur.ClipSound.desktop"
+          test -z "$(ls testlib/icons)"
+
           app/ClipSound/install.sh --remove
           test ! -e "$D/clipsound" && test ! -e "$HOME/.local/bin/clipsound"
 

@@ -29,6 +29,12 @@ Ein schnelles Soundboard für Meme-Sounds: Klick oder Tastendruck spielt den Sou
 
 - Mit **Überlappen** laufen mehrere Sounds gleichzeitig.
 - **Bilder** (Mac): Jeder Sound kann ein Bild bekommen – Rechtsklick → *Bild hinzufügen …*, *Bild aus der Zwischenablage* oder ein Bild direkt auf die Kachel ziehen. Die Bilder bleiben auf dem Mac (`~/Library/Application Support/ClipSound/Bilder`).
+- **Eigenes App-Icon** (alle Versionen): ein beliebiges Bild wird mittig quadratisch zugeschnitten und bleibt auf dem Gerät.
+  - Mac: *Einstellungen › App-Icon* – gilt fürs Dock, solange ClipSound läuft.
+  - Windows: *Einstellungen › App-Icon* – Fenster, Taskleiste und Infobereich.
+  - Linux: *Einstellungen › App-Icon* – Fenster und, nach `install.sh`, App-Menü und Dock (der `.desktop`-Eintrag zeigt dann auf das Bild).
+  - iPhone: Zahnrad oben links › *App-Icon*. iOS lässt Apps ihr Home-Bildschirm-Symbol nicht frei ändern; die App sichert das Bild auf Wunsch in Fotos und erklärt den Weg über die Kurzbefehle-App („App öffnen“ → „Zum Home-Bildschirm“).
+  - Web: Klick aufs Logo – ersetzt Logo und Tab-Symbol, nur in diesem Browser (localStorage).
 - Die Apps starten leer. Sounds lassen sich einzeln oder als ganzer Ordner importieren, auch per Drag & Drop.
 - Auf dem iPhone liegen die Sounds in der Dateien-App unter *Auf meinem iPhone › ClipSound*.
 
@@ -54,5 +60,5 @@ Ein neues Release veröffentlichen:
 - Mac: macOS 15+ (Liquid Glass ab macOS 26). Zum Bauen Xcode 26 oder neuer – `actool` baut daraus das Icon (`macos/Resources/AppIcon.icon`, Icon Composer)
 - Windows: Windows 10/11 (64 Bit). Zum Bauen braucht man das .NET 10 SDK; der Build läuft auch auf macOS.
 - Linux: GTK 4.14+ und libadwaita 1.5+ – also Ubuntu 24.04, Fedora 40, Debian 13, Linux Mint 22, Pop!_OS 24.04 oder neuer, Arch, openSUSE Tumbleweed. x64 und ARM64. Installieren: Archiv entpacken, `./install.sh` (ohne Root; App-Menü, Symbol, Befehl `clipsound`). FLAC, M4A, AAC und Opus brauchen `ffmpeg`. Ton über PulseAudio/PipeWire, sonst ALSA.
-- iPhone: iOS 17+, Xcode und xcodegen
+- iPhone: iOS 17+, Xcode 26 und xcodegen (das App-Icon kommt aus derselben Icon-Composer-Datei wie am Mac)
 - Web: Node.js 18+
